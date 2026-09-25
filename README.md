@@ -87,6 +87,7 @@ victus-report --with-ec                      # + дамп EC (спросит sud
 victus-suite/
 ├── README.md                     ← этот файл (быстрый старт)
 ├── START_DEVELOPMENT.md          ← ТОЧКА ВХОДА: состояние, roadmap, правила агента
+├── PROGRESS_LOG.md               ← журнал контекста (статус, время, следующий шаг)
 ├── TZ.md                         ← полное техническое задание
 ├── install.sh                    ← ./install.sh [--remove] → симлинки в ~/.local/bin
 ├── LICENSE                       ← MIT
