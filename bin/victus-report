@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# victus-report — collect diagnostics + logs into one file (for bug reports).
+#
+# Usage:
+#   victus-report              # user-level report
+#   victus-report --with-ec    # also dump EC (runs sudo victus-kbd dump)
+#
+# Output: <project>/state/report-YYYYmmdd-HHMMSS.txt   (one project folder)
+
+set -u
+
+TOOL="victus-report"
+
+# One project folder: <project>/bin, <project>/state, <project>/logs
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+if [[ "$(basename "$SCRIPT_DIR")" == "bin" ]]; then
+  STATE_DIR="${VICTUS_STATE_DIR:-$PROJECT_DIR/state}"
+  LOG_DIR="${VICTUS_LOG_DIR:-$PROJECT_DIR/logs}"
+else
+  STATE_DIR="${VICTUS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/victus}"
+  LOG_DIR="${VICTUS_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/victus}"
+fi
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT="$STATE_DIR/report-$STAMP.txt"
+WITH_EC=0
+
+[[ "${1:-}" == "--with-ec" ]] && WITH_EC=1
+
+mkdir -p "$STATE_DIR" || exit 1
+
+exec > >(tee "$OUT") 2>&1
+
+section() { printf '\n========== %s ==========\n' "$1"; }
+
+section "report"
+echo "date: $(date --iso-8601=seconds)"
+echo "file: $OUT"
+echo "user: $(id)"
+
+section "system"
+uname -a
+echo "--- dmi"
+for f in sys_vendor product_name product_version board_name board_sku product_sku bios_version; do
+  p="/sys/class/dmi/id/$f"
+  [[ -r "$p" ]] && printf '%-16s %s\n' "$f" "$(cat "$p" 2>/dev/null)"
+done
+echo "--- kernel modules"
+lsmod | grep -E '^(hp_wmi|ec_sys|nvidia|asus_wmi|ideapad_laptop) ' || true
+echo "--- cmdline"
+cat /proc/cmdline
+
+section "tools present"
+for t in python3 sudo modprobe brightnessctl sensors nvidia-smi powerprofilesctl \
+         systemctl journalctl pacman dpkg rpm mangohud; do
+  if command -v "$t" >/dev/null 2>&1; then
+    printf '%-20s %s\n' "$t" "$(command -v "$t")"
+  else
+    printf '%-20s MISSING\n' "$t"
+  fi
+done
+
+section "victus tools"
+for t in victus-kbd ColorMaker Changer victus victusd; do
+  p="$(command -v "$t" 2>/dev/null || true)"
+  if [[ -n "$p" ]]; then printf '%-20s %s\n' "$t" "$p"; else printf '%-20s MISSING\n' "$t"; fi
+done
+
+section "keyboard backlight nodes"
+echo "--- leds"
+ls -1 /sys/class/leds/ 2>/dev/null || echo "(none)"
+echo "--- kbd_backlight"
+ls -d /sys/class/leds/*kbd_backlight* 2>/dev/null || echo "(absent)"
+echo "--- ec"
+if [[ -r /sys/kernel/debug/ec/ec0/io ]]; then
+  echo "ec io readable: yes"
+else
+  echo "ec io readable: no (needs debugfs + ec_sys write_support, root)"
+fi
+ls -ld /sys/kernel/debug 2>/dev/null
+
+section "fans (hwmon hp)"
+found=0
+for d in /sys/class/hwmon/hwmon*; do
+  n="$(cat "$d/name" 2>/dev/null || true)"
+  [[ "$n" == "hp" ]] || continue
+  found=1
+  echo "$d (name=$n)"
+  for f in pwm1 pwm2 pwm1_enable pwm2_enable fan1_input fan2_input; do
+    [[ -e "$d/$f" ]] && printf '  %-12s = %s\n' "$f" "$(cat "$d/$f" 2>/dev/null)"
+  done
+done
+[[ $found -eq 0 ]] && echo "(no hwmon named 'hp' — fan control unavailable on this kernel)"
+
+section "temps"
+for d in /sys/class/hwmon/hwmon*; do
+  n="$(cat "$d/name" 2>/dev/null || true)"
+  for t in "$d"/temp*_input; do
+    [[ -e "$t" ]] || continue
+    label="${t%_input}_label"
+    lbl="$([[ -r "$label" ]] && cat "$label" || echo "")"
+    v="$(cat "$t" 2>/dev/null || echo 0)"
+    printf '%-10s %-14s %s mC (%s C)\n' "$n" "$lbl" "$v" "$((v / 1000))"
+  done
+done | head -40
+
+section "gpu"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,power.draw,power.limit,clocks.max.sm \
+    --format=csv 2>&1 || true
+else
+  echo "nvidia-smi missing"
+fi
+
+section "power / profiles"
+echo "platform_profile:        $(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo n/a)"
+echo "platform_profile_choices:$(cat /sys/firmware/acpi/platform_profile_choices 2>/dev/null || echo n/a)"
+command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl list 2>&1 || true
+echo "intel_pstate/status:     $(cat /sys/devices/system/cpu/intel_pstate/status 2>/dev/null || echo n/a)"
+echo "epp cpu0:                $(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null || echo n/a)"
+echo "no_turbo:                $(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || echo n/a)"
+systemctl is-active power-profiles-daemon thermald 2>&1 || true
+for c in /sys/class/powercap/intel-rapl:0/constraint_*_power_limit_uw; do
+  [[ -e "$c" ]] && printf '%s = %s W\n' "$(basename "$c")" "$(cat "$c" | awk '{printf "%.1f", $1/1e6}')"
+done
+
+section "dmesg (hp/wmi/ec)"
+dmesg 2>/dev/null | grep -iE 'hp.?wmi|ec_sys|thermal|pwm' | tail -30 || echo "(dmesg not readable)"
+
+section "sensors"
+command -v sensors >/dev/null 2>&1 && sensors 2>&1 | head -60 || echo "lm-sensors missing"
+
+section "daemon / services"
+systemctl status victusd --no-pager -n 5 2>&1 || true
+ps -ef | grep -E 'victus|victusd' | grep -v grep || echo "(no victus processes)"
+
+section "victus log (tail 120)"
+LOG="$LOG_DIR/victus.log"
+if [[ -r "$LOG" ]]; then
+  echo "log: $LOG  ($(wc -l < "$LOG") lines, $(du -h "$LOG" | cut -f1))"
+  tail -n 120 "$LOG"
+else
+  echo "(no log at $LOG)"
+fi
+
+section "colors config"
+CONF="$HOME/.config/victus-kbd/colors.conf"
+[[ -r "$CONF" ]] && cat "$CONF" || echo "(no colors.conf)"
+
+if [[ $WITH_EC -eq 1 ]]; then
+  section "ec dump 0x00-0x40"
+  if command -v victus-kbd >/dev/null 2>&1; then
+    sudo -n victus-kbd dump 0 64 2>&1 || sudo victus-kbd dump 0 64 2>&1 || echo "(ec dump failed)"
+  else
+    echo "victus-kbd missing"
+  fi
+fi
+
+section "end"
+echo "report written to: $OUT"
+echo "attach this file to the bug report (check for serial number before sharing)"

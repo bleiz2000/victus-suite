@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""HP Victus keyboard RGB via ACPI EC (/sys/kernel/debug/ec/ec0/io)."""
+
+import os
+import subprocess
+import sys
+import time
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+import victus_log as vlog  # noqa: E402
+
+TOOL = "victus-kbd"
+
+EC_PATH = "/sys/kernel/debug/ec/ec0/io"
+OFFSETS = (8, 9, 10)
+
+PRESETS = {
+    "red": (255, 0, 0),
+    "fire": (255, 50, 0),
+    "darkred": (139, 0, 0),
+    "scarlet": (255, 20, 20),
+    "green": (0, 255, 0),
+    "blue": (0, 0, 255),
+    "yellow": (255, 255, 0),
+    "cyan": (0, 255, 255),
+    "purple": (255, 0, 255),
+    "pink": (255, 105, 180),
+    "lightpink": (255, 192, 203),
+    "white": (255, 255, 255),
+    "off": (0, 0, 0),
+}
+
+
+def die(msg):
+    vlog.log_error(TOOL, msg, exc=False)
+    print(f"victus-kbd: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+DRY = os.environ.get("VICTUS_DRY_RUN") == "1"
+_dry_state = [255, 255, 255]
+
+
+def ensure_ec():
+    if DRY:
+        return
+    if not os.path.exists("/sys/kernel/debug"):
+        vlog.log_info(TOOL, "mounting debugfs")
+        subprocess.run(
+            ["mount", "-t", "debugfs", "none", "/sys/kernel/debug"], check=True
+        )
+    if not os.path.exists(EC_PATH):
+        vlog.log_info(TOOL, "loading ec_sys write_support=1")
+        subprocess.run(["modprobe", "ec_sys", "write_support=1"], check=True)
+    if not os.path.exists(EC_PATH):
+        die("EC interface not available (ec_sys write_support=1 failed)")
+    if not os.access(EC_PATH, os.W_OK):
+        die(f"{EC_PATH} not writable")
+
+
+def read_rgb():
+    if DRY:
+        return tuple(_dry_state)
+    with open(EC_PATH, "rb") as f:
+        f.seek(OFFSETS[0])
+        return tuple(f.read(3))
+
+
+def write_rgb(r, g, b):
+    if DRY:
+        _dry_state[:] = [r, g, b]
+        print(f"[dry-run] rgb -> {r},{g},{b}", flush=True)
+        return
+    with open(EC_PATH, "r+b", buffering=0) as f:
+        f.seek(OFFSETS[0])
+        f.write(bytes((r, g, b)))
+
+
+def dump(start, length):
+    with open(EC_PATH, "rb") as f:
+        f.seek(start)
+        data = f.read(length)
+    for i in range(0, len(data), 16):
+        chunk = data[i : i + 16]
+        hexpart = " ".join(f"{b:02x}" for b in chunk)
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        print(f"{start + i:04x}: {hexpart:<47} {asc}")
+
+
+def parse_color(tok):
+    t = tok.lower()
+    if t in PRESETS:
+        return PRESETS[t]
+    if t.startswith("#") and len(t) == 7:
+        h = t[1:]
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    if "," in t:
+        parts = tuple(int(x) for x in t.split(","))
+        if len(parts) == 3 and all(0 <= v <= 255 for v in parts):
+            return parts
+    die(f"bad color '{tok}' (preset | #RRGGBB | R,G,B)")
+
+
+def pidfile():
+    return os.path.join(vlog.state_dir(), "cycle.pid")
+
+
+def read_pid():
+    try:
+        with open(pidfile()) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def cmd_stop():
+    pid = read_pid()
+    if pid is None or not alive(pid):
+        if os.path.exists(pidfile()):
+            os.remove(pidfile())
+        print("cycle: not running")
+        vlog.log_info(TOOL, "stop: no cycle running")
+        return
+    os.kill(pid, 15)
+    for _ in range(20):
+        if not alive(pid):
+            break
+        time.sleep(0.1)
+    if os.path.exists(pidfile()):
+        os.remove(pidfile())
+    print(f"cycle: stopped (pid {pid})")
+    vlog.log_info(TOOL, f"stop: killed pid {pid}")
+
+
+def cmd_cycle(args):
+    delay = 1.0
+    bg = False
+    is_child = False
+    colors = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--bg":
+            bg = True
+        elif a == "--is-child":
+            is_child = True
+        elif a == "--delay":
+            i += 1
+            if i >= len(args):
+                die("--delay needs a value in seconds")
+            delay = float(args[i])
+        elif a.startswith("--delay="):
+            delay = float(a.split("=", 1)[1])
+        else:
+            colors.append(a)
+        i += 1
+
+    if not colors:
+        die("cycle needs at least one color")
+    if delay < 0.1:
+        die("--delay must be >= 0.1")
+    rgb_list = [parse_color(c) for c in colors]
+
+    existing = read_pid()
+    if existing is not None and alive(existing) and existing != os.getpid():
+        if not is_child:
+            die(
+                f"cycle already running (pid {existing}) — "
+                "stop it first: victus-kbd stop"
+            )
+
+    if bg:
+        os.makedirs(vlog.state_dir(), exist_ok=True)
+        cmd = [sys.executable, os.path.realpath(__file__), "cycle"]
+        cmd += colors + ["--delay", str(delay), "--is-child"]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        with open(pidfile(), "w") as f:
+            f.write(str(proc.pid))
+        print(f"cycle: started pid {proc.pid} colors={rgb_list} delay={delay}s")
+        vlog.log_info(TOOL, f"cycle start pid={proc.pid} colors={rgb_list} delay={delay}")
+        return
+
+    os.makedirs(vlog.state_dir(), exist_ok=True)
+    with open(pidfile(), "w") as f:
+        f.write(str(os.getpid()))
+    vlog.log_info(TOOL, f"cycle loop pid={os.getpid()} colors={rgb_list} delay={delay}")
+    print(
+        f"cycle: {rgb_list} every {delay}s — Ctrl+C or 'victus-kbd stop' to end",
+        flush=True,
+    )
+    try:
+        while True:
+            for rgb in rgb_list:
+                write_rgb(*rgb)
+                got = read_rgb()
+                vlog.log_debug(TOOL, f"cycle -> {got}")
+                time.sleep(delay)
+    except KeyboardInterrupt:
+        vlog.log_info(TOOL, "cycle interrupted by user")
+    finally:
+        if read_pid() == os.getpid() and os.path.exists(pidfile()):
+            os.remove(pidfile())
+
+
+def main():
+    args = sys.argv[1:]
+    vlog.log_info(TOOL, f"invoke euid={os.geteuid()} argv={args!r}")
+
+    if os.geteuid() != 0 and not DRY:
+        die("run with sudo")
+
+    if not args:
+        ensure_ec()
+        print("current:", *read_rgb())
+        print("usage: victus-kbd <preset|RGB> | cycle <color...> [--delay S] [--bg]"
+              "\n       victus-kbd stop | get | dump [start] [len]")
+        return
+
+    cmd = args[0].lower()
+
+    if cmd == "cycle":
+        ensure_ec()
+        cmd_cycle(args[1:])
+        return
+
+    if cmd == "stop":
+        cmd_stop()
+        return
+
+    if cmd == "dump":
+        ensure_ec()
+        start = int(args[1], 0) if len(args) > 1 else 0
+        length = int(args[2], 0) if len(args) > 2 else 64
+        dump(start, length)
+        vlog.log_debug(TOOL, f"dump start={start} len={length} ok")
+        return
+
+    ensure_ec()
+
+    if cmd in PRESETS:
+        rgb = PRESETS[cmd]
+    elif cmd == "off":
+        rgb = PRESETS["off"]
+    elif cmd == "get":
+        print(*read_rgb())
+        return
+    elif len(args) == 3:
+        rgb = tuple(int(a) for a in args)
+    elif len(args) == 1 and "," in args[0]:
+        rgb = tuple(int(a) for a in args[0].split(","))
+    else:
+        die(f"unknown arguments: {' '.join(args)}")
+
+    if len(rgb) != 3 or any(v < 0 or v > 255 for v in rgb):
+        die(f"bad rgb: {rgb}")
+
+    before = read_rgb()
+    write_rgb(*rgb)
+    after = read_rgb()
+    if after != tuple(rgb):
+        if after == (0, 0, 0) and tuple(rgb) != (0, 0, 0):
+            die(f"write did not stick: wrote {rgb}, ec read {after}")
+        vlog.log("warn", TOOL, f"readback {after} != written {rgb} (EC clamps)")
+    vlog.log_info(TOOL, f"rgb {before} -> {after}")
+    print(f"rgb {before} -> {after}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        vlog.log_exception(TOOL, f"unhandled {type(e).__name__}: {e}")
+        print(f"victus-kbd: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"victus-kbd: see log {vlog.log_path()}", file=sys.stderr)
+        sys.exit(1)

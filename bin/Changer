@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Changer — apply a color to the HP Victus keyboard backlight.
+
+Usage:
+  Changer <name>              # e.g. Changer pink
+  Changer <r> <g> <b>         # e.g. Changer 255 105 180
+  Changer "#RRGGBB"
+  Changer list                # show available color names
+  Changer random              # random from palette
+  Changer off                 # switch backlight color off
+
+Backend: sudo victus-kbd  (writes EC registers)
+Extras:  Changer cycle-red   bright red cycle
+         Changer cycle red fire --delay 1
+         Changer stop
+"""
+
+import os
+import random
+import re
+import subprocess
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+import victus_log as vlog  # noqa: E402
+
+TOOL = "Changer"
+
+BACKEND = os.path.join(_HERE, "victus-kbd")
+CONF = os.path.join(vlog.config_dir(), "colors.conf")
+NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def die(msg):
+    vlog.log_error(TOOL, msg, exc=False)
+    print(f"Changer: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load_colors():
+    colors = {}
+    if os.path.exists(CONF):
+        with open(CONF) as f:
+            for lineno, line in enumerate(f, 1):
+                raw = line.rstrip("\n")
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: no '=' in {raw!r}")
+                    continue
+                name, val = line.split("=", 1)
+                try:
+                    rgb = tuple(int(x) for x in val.split(","))
+                except ValueError:
+                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: bad rgb {val!r}")
+                    continue
+                if len(rgb) == 3 and all(0 <= v <= 255 for v in rgb):
+                    colors[name.strip()] = rgb
+                else:
+                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: out of range {rgb}")
+    out = subprocess.run(["ColorMaker", "palette"], capture_output=True, text=True)
+    if out.returncode != 0:
+        vlog.log(
+            "warn",
+            TOOL,
+            f"ColorMaker palette failed rc={out.returncode}: {out.stderr.strip()!r}",
+        )
+    else:
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].startswith("#"):
+                h = parts[1][1:]
+                colors[parts[0]] = (
+                    int(h[0:2], 16),
+                    int(h[2:4], 16),
+                    int(h[4:6], 16),
+                )
+    if not colors:
+        vlog.log("warn", TOOL, "palette is empty")
+    return colors
+
+
+def run_backend(argv):
+    if not os.path.exists(BACKEND):
+        die(f"backend not found: {BACKEND}")
+    cmd = ["sudo", BACKEND] + [str(a) for a in argv]
+    vlog.log_info(TOOL, f"run {' '.join(cmd)}")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        vlog.log_error(
+            TOOL, f"backend failed rc={result.returncode} argv={argv!r}", exc=False
+        )
+    else:
+        vlog.log_info(TOOL, f"backend ok argv={argv!r}")
+    sys.exit(result.returncode)
+
+
+def apply(rgb):
+    run_backend([str(rgb[0]), str(rgb[1]), str(rgb[2])])
+
+
+def resolve_token(tok, colors):
+    """Turn a user color token into a backend token (name -> R,G,B)."""
+    if tok.startswith("--") or "," in tok or tok.startswith("#"):
+        return tok
+    if tok in colors:
+        r, g, b = colors[tok]
+        return f"{r},{g},{b}"
+    return tok
+
+
+def main():
+    args = sys.argv[1:]
+    vlog.log_info(TOOL, f"invoke argv={args!r}")
+    if not args:
+        die("usage: Changer <name> | R G B | #hex | list | random | off | cycle [colors] [--delay S] | cycle-red | stop")
+
+    cmd = args[0].lower()
+
+    if cmd == "list":
+        subprocess.run(["ColorMaker", "list"])
+        return
+
+    if cmd == "stop":
+        run_backend(["stop"])
+
+    if cmd in ("cycle", "cycle-red"):
+        rest = list(args[1:])
+        if cmd == "cycle-red":
+            rest = ["red", "fire", "darkred", "--delay", "1", "--bg"] + rest
+        colors = load_colors()
+        resolved = []
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            if tok == "--delay" and i + 1 < len(rest):
+                resolved.append(tok)
+                resolved.append(rest[i + 1])
+                i += 2
+                continue
+            resolved.append(resolve_token(tok, colors))
+            i += 1
+        run_backend(["cycle"] + resolved)
+
+    if cmd == "off":
+        apply((0, 0, 0))
+        return
+
+    if cmd == "random":
+        colors = load_colors()
+        palette = [v for k, v in colors.items() if k != "off"]
+        if not palette:
+            die("no colors defined")
+        apply(random.choice(palette))
+        return
+
+    if len(args) == 1:
+        name = args[0]
+        if name.startswith("#") and len(name) == 7:
+            h = name[1:]
+            apply((int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+            return
+        if NAME_RE.match(name):
+            colors = load_colors()
+            if name in colors:
+                apply(colors[name])
+            else:
+                die(
+                    f"unknown color '{name}' — see: Changer list "
+                    f"(add new: ColorMaker add {name} 255 105 180)"
+                )
+            return
+
+    if len(args) == 3:
+        try:
+            rgb = tuple(int(a) for a in args)
+        except ValueError:
+            die("rgb must be integers 0-255")
+        if not all(0 <= v <= 255 for v in rgb):
+            die("rgb must be 0-255")
+        apply(rgb)
+        return
+
+    die(f"unknown arguments: {' '.join(args)}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        vlog.log_exception(TOOL, f"unhandled {type(e).__name__}: {e}")
+        print(f"Changer: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"Changer: see log {vlog.log_path()}", file=sys.stderr)
+        sys.exit(1)

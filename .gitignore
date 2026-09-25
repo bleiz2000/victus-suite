@@ -1,0 +1,12 @@
+# private runtime data — never committed
+logs/
+state/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# local-only user config
+config/*local*
