@@ -24,6 +24,7 @@ import sys
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _HERE)
 import victus_log as vlog  # noqa: E402
+from i18n import t  # noqa: E402
 
 TOOL = "Changer"
 
@@ -84,7 +85,7 @@ def load_colors():
 
 def run_backend(argv):
     if not os.path.exists(BACKEND):
-        die(f"backend not found: {BACKEND}")
+        die(t("changer.backend_missing", path=BACKEND))
     cmd = ["sudo", BACKEND] + [str(a) for a in argv]
     vlog.log_info(TOOL, f"run {' '.join(cmd)}")
     result = subprocess.run(cmd)
@@ -115,7 +116,7 @@ def main():
     args = sys.argv[1:]
     vlog.log_info(TOOL, f"invoke argv={args!r}")
     if not args:
-        die("usage: Changer <name> | R G B | #hex | list | random | off | cycle [colors] [--delay S] | cycle-red | stop")
+        die(t("changer.usage"))
 
     cmd = args[0].lower()
 
@@ -152,7 +153,7 @@ def main():
         colors = load_colors()
         palette = [v for k, v in colors.items() if k != "off"]
         if not palette:
-            die("no colors defined")
+            die(t("changer.no_colors"))
         apply(random.choice(palette))
         return
 
@@ -167,23 +168,20 @@ def main():
             if name in colors:
                 apply(colors[name])
             else:
-                die(
-                    f"unknown color '{name}' — see: Changer list "
-                    f"(add new: ColorMaker add {name} 255 105 180)"
-                )
+                die(t("changer.unknown_color", name=name))
             return
 
     if len(args) == 3:
         try:
             rgb = tuple(int(a) for a in args)
         except ValueError:
-            die("rgb must be integers 0-255")
+            die(t("changer.rgb_int"))
         if not all(0 <= v <= 255 for v in rgb):
-            die("rgb must be 0-255")
+            die(t("changer.rgb_range"))
         apply(rgb)
         return
 
-    die(f"unknown arguments: {' '.join(args)}")
+    die(t("changer.unknown_args", args=" ".join(args)))
 
 
 if __name__ == "__main__":
@@ -191,8 +189,13 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        finally:
+            os._exit(0)
     except Exception as e:
         vlog.log_exception(TOOL, f"unhandled {type(e).__name__}: {e}")
-        print(f"Changer: {type(e).__name__}: {e}", file=sys.stderr)
-        print(f"Changer: see log {vlog.log_path()}", file=sys.stderr)
+        print(t("common.unhandled", tool=TOOL, type=type(e).__name__, msg=e), file=sys.stderr)
+        print(t("common.see_log", path=vlog.log_path()), file=sys.stderr)
         sys.exit(1)

@@ -20,6 +20,7 @@ import sys
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _HERE)
 import victus_log as vlog  # noqa: E402
+from i18n import t  # noqa: E402
 
 TOOL = "ColorMaker"
 
@@ -124,7 +125,7 @@ def save(colors):
             for name in sorted(custom):
                 f.write(f"{name} = {','.join(str(v) for v in custom[name])}\n")
     except OSError as e:
-        die(f"cannot write {CONF}: {e}")
+        die(t("cm.write_failed", path=CONF, err=e))
 
 
 def parse_rgb(args):
@@ -135,7 +136,7 @@ def parse_rgb(args):
         vals = [int(a) for a in args]
         if all(0 <= v <= 255 for v in vals):
             return tuple(vals)
-    die("expected: <r> <g> <b> (0-255) or #RRGGBB")
+    die(t("cm.bad_rgb"))
 
 
 def main():
@@ -157,42 +158,42 @@ def main():
 
     if cmd == "show":
         if len(args) != 2:
-            die("usage: ColorMaker show <name>")
+            die(t("cm.usage_show"))
         name = args[1].lower()
         if name not in colors:
-            die(f"unknown color '{name}'")
+            die(t("cm.unknown_color", name=name))
         r, g, b = colors[name]
         print(f"{name} = {r},{g},{b}  #{r:02x}{g:02x}{b:02x}")
         return
 
     if cmd == "add":
         if len(args) < 3:
-            die("usage: ColorMaker add <name> <r> <g> <b> | <name> #RRGGBB")
+            die(t("cm.usage_add"))
         name = args[1].lower()
         if not NAME_RE.match(name):
-            die("name must be lowercase english: a-z, 0-9, '-', '_'")
+            die(t("cm.name_rule"))
         rgb = parse_rgb(args[2:])
         colors[name] = rgb
         save(colors)
         vlog.log_info(TOOL, f"add {name}={rgb} -> {CONF}")
-        print(f"saved {name} = {rgb[0]},{rgb[1]},{rgb[2]} -> {CONF}")
+        print(t("cm.saved", name=name, rgb=f"{rgb[0]},{rgb[1]},{rgb[2]}", path=CONF))
         return
 
     if cmd == "rm":
         if len(args) != 2:
-            die("usage: ColorMaker rm <name>")
+            die(t("cm.usage_rm"))
         name = args[1].lower()
         if name in BUILTIN:
-            die(f"'{name}' is built-in, cannot remove")
+            die(t("cm.builtin_locked", name=name))
         if name not in colors:
-            die(f"unknown color '{name}'")
+            die(t("cm.unknown_color", name=name))
         del colors[name]
         save(colors)
         vlog.log_info(TOOL, f"rm {name}")
-        print(f"removed {name}")
+        print(t("cm.removed", name=name))
         return
 
-    die(f"unknown command '{cmd}' (list|palette|show|add|rm)")
+    die(t("common.unknown_command", cmd=cmd, allowed="list|palette|show|add|rm"))
 
 
 if __name__ == "__main__":
@@ -200,8 +201,13 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        finally:
+            os._exit(0)
     except Exception as e:
         vlog.log_exception(TOOL, f"unhandled {type(e).__name__}: {e}")
-        print(f"ColorMaker: {type(e).__name__}: {e}", file=sys.stderr)
-        print(f"ColorMaker: see log {vlog.log_path()}", file=sys.stderr)
+        print(t("common.unhandled", tool=TOOL, type=type(e).__name__, msg=e), file=sys.stderr)
+        print(t("common.see_log", path=vlog.log_path()), file=sys.stderr)
         sys.exit(1)

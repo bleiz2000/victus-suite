@@ -4,9 +4,13 @@
 режимы питания, вентиляторы, мониторинг и оверлей (замена Shift+F2).
 Локальная папка проекта: `~/Work/victus-suite` → GitHub `omen-gaming-hub-linux`.
 
-**Стратегия — сначала простое:** фаза A (свет) уже работает, фаза B (режимы),
-C (вентиляторы), D (оверлей), E (daemon/GUI), F (другие модели).
-Подробности — `TZ.md` §2.4.
+> **Vibe Coding** — проект создаётся при активной поддержке AI-агента
+> в связке с пользователем. Начало разработки: **`START_DEVELOPMENT.md`**
+> (текущее состояние, дорожная карта, правила агента).
+
+**Стратегия — сначала простое:** этап 1 (базовый CLI: свет, фены, температуры),
+этап 2 (TUI на Textual), этап 3 (эффекты и профили питания).
+Подробности — `START_DEVELOPMENT.md` §4.
 
 ## Что уже работает сейчас
 
@@ -24,7 +28,8 @@ C (вентиляторы), D (оверлей), E (daemon/GUI), F (другие 
 | `victus-report [--with-ec]` | Диагностика + логи в один файл | нет |
 
 Код: `bin/` (симлинки в `~/.local/bin` ставит `./install.sh`)
-Конфиг: `config/colors.conf`
+Конфиг: `config/colors.conf`, язык: `config/locale`
+Локали: `locales/ru.json`, `locales/en.json`
 Лог: `logs/victus.log` (ротация 512 KiB × 5)
 Отчёты: `state/report-<дата>.txt`
 
@@ -42,6 +47,20 @@ Changer random
 ColorMaker add mycolor 30 144 255   # своё имя (english)
 Changer mycolor
 ```
+
+## Язык интерфейса (локализация)
+
+По умолчанию **русский**. Сообщения лежат в `locales/<код>.json`,
+текущий язык — в файле `config/locale`.
+
+```bash
+VICTUS_LANG=en Changer list        # язык на лету
+echo en > config/locale            # язык по умолчанию
+cp locales/ru.json locales/de.json # добавить новый язык
+```
+
+Как добавить язык: скопировать `ru.json`, перевести значения (ключи не трогать),
+указать код в `config/locale` или в `VICTUS_LANG`. Fallback — `en.json`.
 
 ## Логи и диагностика
 
@@ -66,14 +85,18 @@ victus-report --with-ec                      # + дамп EC (спросит sud
 
 ```
 victus-suite/
-├── README.md                     ← этот файл
-├── TZ.md                         ← техническое задание на программу
+├── README.md                     ← этот файл (быстрый старт)
+├── START_DEVELOPMENT.md          ← ТОЧКА ВХОДА: состояние, roadmap, правила агента
+├── TZ.md                         ← полное техническое задание
 ├── install.sh                    ← ./install.sh [--remove] → симлинки в ~/.local/bin
+├── LICENSE                       ← MIT
 ├── bin/                          ← все команды (сюда класть новые)
-│   victus-kbd  ColorMaker  Changer  victus-report  victus_log.py
-├── config/                       ← colors.conf, profiles.d/, curves.d/
-├── logs/                         ← victus.log (+ ротация .1..5)
-├── state/                        ← report-*.txt, state.json, ec-backup.bin
+│   victus-kbd  ColorMaker  Changer  victus-report
+│   victus_log.py (логирование)   i18n.py (перевод)
+├── locales/                      ← ru.json, en.json (тексты интерфейса)
+├── config/                       ← colors.conf, locale, profiles.d/, curves.d/
+├── logs/                         ← victus.log (+ ротация .1..5)   [не в git]
+├── state/                        ← report-*.txt                   [не в git]
 └── docs/
     ├── 01-chto-sdelano.md        ← как сделана подсветка, что проверено
     ├── 02-audit-sistemy.md       ← что выставлено на конкретной машине

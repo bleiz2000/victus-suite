@@ -9,4 +9,5 @@ __pycache__/
 .venv/
 
 # local-only user config
-config/*local*
+config/*.local
+config/local/

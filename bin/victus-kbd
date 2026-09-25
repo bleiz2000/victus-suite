@@ -9,6 +9,7 @@ import time
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _HERE)
 import victus_log as vlog  # noqa: E402
+from i18n import t  # noqa: E402
 
 TOOL = "victus-kbd"
 
@@ -54,9 +55,9 @@ def ensure_ec():
         vlog.log_info(TOOL, "loading ec_sys write_support=1")
         subprocess.run(["modprobe", "ec_sys", "write_support=1"], check=True)
     if not os.path.exists(EC_PATH):
-        die("EC interface not available (ec_sys write_support=1 failed)")
+        die(t("kbd.ec_unavailable"))
     if not os.access(EC_PATH, os.W_OK):
-        die(f"{EC_PATH} not writable")
+        die(t("kbd.ec_not_writable", path=EC_PATH))
 
 
 def read_rgb():
@@ -89,17 +90,17 @@ def dump(start, length):
 
 
 def parse_color(tok):
-    t = tok.lower()
-    if t in PRESETS:
-        return PRESETS[t]
-    if t.startswith("#") and len(t) == 7:
-        h = t[1:]
+    low = tok.lower()
+    if low in PRESETS:
+        return PRESETS[low]
+    if low.startswith("#") and len(low) == 7:
+        h = low[1:]
         return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-    if "," in t:
-        parts = tuple(int(x) for x in t.split(","))
+    if "," in low:
+        parts = tuple(int(x) for x in low.split(","))
         if len(parts) == 3 and all(0 <= v <= 255 for v in parts):
             return parts
-    die(f"bad color '{tok}' (preset | #RRGGBB | R,G,B)")
+    die(t("kbd.bad_color", tok=tok))
 
 
 def pidfile():
@@ -127,7 +128,7 @@ def cmd_stop():
     if pid is None or not alive(pid):
         if os.path.exists(pidfile()):
             os.remove(pidfile())
-        print("cycle: not running")
+        print(t("kbd.cycle_not_running"))
         vlog.log_info(TOOL, "stop: no cycle running")
         return
     os.kill(pid, 15)
@@ -137,7 +138,7 @@ def cmd_stop():
         time.sleep(0.1)
     if os.path.exists(pidfile()):
         os.remove(pidfile())
-    print(f"cycle: stopped (pid {pid})")
+    print(t("kbd.cycle_stopped", pid=pid))
     vlog.log_info(TOOL, f"stop: killed pid {pid}")
 
 
@@ -156,7 +157,7 @@ def cmd_cycle(args):
         elif a == "--delay":
             i += 1
             if i >= len(args):
-                die("--delay needs a value in seconds")
+                die(t("kbd.cycle_delay_value"))
             delay = float(args[i])
         elif a.startswith("--delay="):
             delay = float(a.split("=", 1)[1])
@@ -165,18 +166,15 @@ def cmd_cycle(args):
         i += 1
 
     if not colors:
-        die("cycle needs at least one color")
+        die(t("kbd.cycle_need_color"))
     if delay < 0.1:
-        die("--delay must be >= 0.1")
+        die(t("kbd.cycle_delay_min"))
     rgb_list = [parse_color(c) for c in colors]
 
     existing = read_pid()
     if existing is not None and alive(existing) and existing != os.getpid():
         if not is_child:
-            die(
-                f"cycle already running (pid {existing}) — "
-                "stop it first: victus-kbd stop"
-            )
+            die(t("kbd.cycle_running", pid=existing))
 
     if bg:
         os.makedirs(vlog.state_dir(), exist_ok=True)
@@ -190,7 +188,7 @@ def cmd_cycle(args):
         )
         with open(pidfile(), "w") as f:
             f.write(str(proc.pid))
-        print(f"cycle: started pid {proc.pid} colors={rgb_list} delay={delay}s")
+        print(t("kbd.cycle_started", pid=proc.pid, colors=rgb_list, delay=delay))
         vlog.log_info(TOOL, f"cycle start pid={proc.pid} colors={rgb_list} delay={delay}")
         return
 
@@ -198,10 +196,7 @@ def cmd_cycle(args):
     with open(pidfile(), "w") as f:
         f.write(str(os.getpid()))
     vlog.log_info(TOOL, f"cycle loop pid={os.getpid()} colors={rgb_list} delay={delay}")
-    print(
-        f"cycle: {rgb_list} every {delay}s — Ctrl+C or 'victus-kbd stop' to end",
-        flush=True,
-    )
+    print(t("kbd.cycle_loop", colors=rgb_list, delay=delay), flush=True)
     try:
         while True:
             for rgb in rgb_list:
@@ -221,13 +216,12 @@ def main():
     vlog.log_info(TOOL, f"invoke euid={os.geteuid()} argv={args!r}")
 
     if os.geteuid() != 0 and not DRY:
-        die("run with sudo")
+        die(t("common.run_with_sudo", tool=TOOL))
 
     if not args:
         ensure_ec()
-        print("current:", *read_rgb())
-        print("usage: victus-kbd <preset|RGB> | cycle <color...> [--delay S] [--bg]"
-              "\n       victus-kbd stop | get | dump [start] [len]")
+        print(t("kbd.current", rgb=read_rgb()))
+        print(t("kbd.usage"))
         return
 
     cmd = args[0].lower()
@@ -263,20 +257,20 @@ def main():
     elif len(args) == 1 and "," in args[0]:
         rgb = tuple(int(a) for a in args[0].split(","))
     else:
-        die(f"unknown arguments: {' '.join(args)}")
+        die(t("kbd.unknown_args", args=" ".join(args)))
 
     if len(rgb) != 3 or any(v < 0 or v > 255 for v in rgb):
-        die(f"bad rgb: {rgb}")
+        die(t("kbd.bad_rgb", rgb=rgb))
 
     before = read_rgb()
     write_rgb(*rgb)
     after = read_rgb()
     if after != tuple(rgb):
         if after == (0, 0, 0) and tuple(rgb) != (0, 0, 0):
-            die(f"write did not stick: wrote {rgb}, ec read {after}")
+            die(t("kbd.write_failed", wrote=rgb, got=after))
         vlog.log("warn", TOOL, f"readback {after} != written {rgb} (EC clamps)")
     vlog.log_info(TOOL, f"rgb {before} -> {after}")
-    print(f"rgb {before} -> {after}")
+    print(t("kbd.rgb_changed", before=before, after=after))
 
 
 if __name__ == "__main__":
@@ -284,8 +278,13 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        finally:
+            os._exit(0)
     except Exception as e:
         vlog.log_exception(TOOL, f"unhandled {type(e).__name__}: {e}")
-        print(f"victus-kbd: {type(e).__name__}: {e}", file=sys.stderr)
-        print(f"victus-kbd: see log {vlog.log_path()}", file=sys.stderr)
+        print(t("common.unhandled", tool=TOOL, type=type(e).__name__, msg=e), file=sys.stderr)
+        print(t("common.see_log", path=vlog.log_path()), file=sys.stderr)
         sys.exit(1)
