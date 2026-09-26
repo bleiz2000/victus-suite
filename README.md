@@ -2,7 +2,7 @@
 
 Аналог OMEN Gaming Hub для Linux: подсветка клавиатуры HP Victus/OMEN,
 режимы питания, вентиляторы, мониторинг и оверлей (замена Shift+F2).
-Локальная папка проекта: `~/Work/victus-suite` → GitHub `omen-gaming-hub-linux`.
+Локальная папка проекта: `~/Work/victus-suite` → GitHub `victus-suite`.
 
 > **Vibe Coding** — проект создаётся при активной поддержке AI-агента
 > в связке с пользователем. Начало разработки: **`START_DEVELOPMENT.md`**

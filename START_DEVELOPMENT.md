@@ -54,7 +54,7 @@
 ## 1. Что это за проект
 
 **OMEN Gaming Hub for Linux** (локальная папка `victus-suite`, репозиторий
-`omen-gaming-hub-linux`) — аналог OMEN Gaming Hub для Linux:
+`victus-suite`) — аналог OMEN Gaming Hub для Linux:
 подсветка клавиатуры HP Victus/OMEN, режимы питания, вентиляторы,
 мониторинг и оверлей (замена `Shift+F2`).
 

@@ -9,28 +9,13 @@ import time
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _HERE)
 import victus_log as vlog  # noqa: E402
+import victus_palette as pal  # noqa: E402
 from i18n import t  # noqa: E402
 
 TOOL = "victus-kbd"
 
 EC_PATH = "/sys/kernel/debug/ec/ec0/io"
 OFFSETS = (8, 9, 10)
-
-PRESETS = {
-    "red": (255, 0, 0),
-    "fire": (255, 50, 0),
-    "darkred": (139, 0, 0),
-    "scarlet": (255, 20, 20),
-    "green": (0, 255, 0),
-    "blue": (0, 0, 255),
-    "yellow": (255, 255, 0),
-    "cyan": (0, 255, 255),
-    "purple": (255, 0, 255),
-    "pink": (255, 105, 180),
-    "lightpink": (255, 192, 203),
-    "white": (255, 255, 255),
-    "off": (0, 0, 0),
-}
 
 
 def die(msg):
@@ -90,17 +75,10 @@ def dump(start, length):
 
 
 def parse_color(tok):
-    low = tok.lower()
-    if low in PRESETS:
-        return PRESETS[low]
-    if low.startswith("#") and len(low) == 7:
-        h = low[1:]
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-    if "," in low:
-        parts = tuple(int(x) for x in low.split(","))
-        if len(parts) == 3 and all(0 <= v <= 255 for v in parts):
-            return parts
-    die(t("kbd.bad_color", tok=tok))
+    rgb_val = pal.parse(tok)
+    if rgb_val is None:
+        die(t("kbd.bad_color", tok=tok))
+    return rgb_val
 
 
 def pidfile():
@@ -245,17 +223,18 @@ def main():
 
     ensure_ec()
 
-    if cmd in PRESETS:
-        rgb = PRESETS[cmd]
-    elif cmd == "off":
-        rgb = PRESETS["off"]
-    elif cmd == "get":
+    if cmd == "get":
         print(*read_rgb())
         return
+
+    palette = pal.all_colors()
+
+    if cmd in palette:
+        rgb = palette[cmd]
     elif len(args) == 3:
         rgb = tuple(int(a) for a in args)
-    elif len(args) == 1 and "," in args[0]:
-        rgb = tuple(int(a) for a in args[0].split(","))
+    elif len(args) == 1:
+        rgb = parse_color(args[0])
     else:
         die(t("kbd.unknown_args", args=" ".join(args)))
 

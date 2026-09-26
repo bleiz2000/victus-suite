@@ -17,20 +17,20 @@ Extras:  Changer cycle-red   bright red cycle
 
 import os
 import random
-import re
 import subprocess
 import sys
 
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _HERE)
 import victus_log as vlog  # noqa: E402
+import victus_palette as pal  # noqa: E402
 from i18n import t  # noqa: E402
 
 TOOL = "Changer"
 
 BACKEND = os.path.join(_HERE, "victus-kbd")
 CONF = os.path.join(vlog.config_dir(), "colors.conf")
-NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+NAME_RE = pal.NAME_RE
 
 
 def die(msg):
@@ -40,44 +40,7 @@ def die(msg):
 
 
 def load_colors():
-    colors = {}
-    if os.path.exists(CONF):
-        with open(CONF) as f:
-            for lineno, line in enumerate(f, 1):
-                raw = line.rstrip("\n")
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" not in line:
-                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: no '=' in {raw!r}")
-                    continue
-                name, val = line.split("=", 1)
-                try:
-                    rgb = tuple(int(x) for x in val.split(","))
-                except ValueError:
-                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: bad rgb {val!r}")
-                    continue
-                if len(rgb) == 3 and all(0 <= v <= 255 for v in rgb):
-                    colors[name.strip()] = rgb
-                else:
-                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: out of range {rgb}")
-    out = subprocess.run(["ColorMaker", "palette"], capture_output=True, text=True)
-    if out.returncode != 0:
-        vlog.log(
-            "warn",
-            TOOL,
-            f"ColorMaker palette failed rc={out.returncode}: {out.stderr.strip()!r}",
-        )
-    else:
-        for line in out.stdout.splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[1].startswith("#"):
-                h = parts[1][1:]
-                colors[parts[0]] = (
-                    int(h[0:2], 16),
-                    int(h[2:4], 16),
-                    int(h[4:6], 16),
-                )
+    colors = pal.all_colors(CONF)
     if not colors:
         vlog.log("warn", TOOL, "palette is empty")
     return colors
@@ -86,7 +49,9 @@ def load_colors():
 def run_backend(argv):
     if not os.path.exists(BACKEND):
         die(t("changer.backend_missing", path=BACKEND))
-    cmd = ["sudo", BACKEND] + [str(a) for a in argv]
+    dry = os.environ.get("VICTUS_DRY_RUN") == "1"
+    prefix = [] if (dry or os.geteuid() == 0) else ["sudo"]
+    cmd = prefix + [BACKEND] + [str(a) for a in argv]
     vlog.log_info(TOOL, f"run {' '.join(cmd)}")
     result = subprocess.run(cmd)
     if result.returncode != 0:
@@ -158,18 +123,14 @@ def main():
         return
 
     if len(args) == 1:
-        name = args[0]
-        if name.startswith("#") and len(name) == 7:
-            h = name[1:]
-            apply((int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+        token = args[0]
+        colors = load_colors()
+        rgb = pal.parse(token, colors)
+        if rgb is not None:
+            apply(rgb)
             return
-        if NAME_RE.match(name):
-            colors = load_colors()
-            if name in colors:
-                apply(colors[name])
-            else:
-                die(t("changer.unknown_color", name=name))
-            return
+        if NAME_RE.match(token):
+            die(t("changer.unknown_color", name=token))
 
     if len(args) == 3:
         try:

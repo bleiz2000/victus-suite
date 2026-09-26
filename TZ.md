@@ -1,6 +1,6 @@
 # ТЕХНИЧЕСКОЕ ЗАДАНИЕ
 
-**Проект:** **OMEN Gaming Hub for Linux** (рабочее имя репозитория — `omen-gaming-hub-linux`)
+**Проект:** **OMEN Gaming Hub for Linux** (рабочее имя репозитория — `victus-suite`)
 **Что это:** аналог OMEN Gaming Hub для Linux: подсветка клавиатуры, режимы
 производительности, вентиляторы, мониторинг и оверлей (замена Shift+F2).
 **Хостинг:** GitHub (публичный репозиторий — обязательно, см. §12.1).
@@ -514,7 +514,7 @@ mode = "max"
 
 ### 12.1. Хостинг (GitHub — обязательно)
 
-- Репозиторий **публичный**, имя: `omen-gaming-hub-linux`
+- Репозиторий **публичный**, имя: `victus-suite`
   (описание: *OMEN Gaming Hub for Linux — HP Victus/OMEN keyboard RGB,
   fan control, power profiles, overlay*).
 - Всё, что попадает в git: `bin/`, `config/*.conf`, `docs/`, `TZ.md`,
@@ -531,7 +531,7 @@ mode = "max"
 git init
 git add README.md TZ.md install.sh LICENSE .gitignore bin config docs
 git commit -m "v0.1: keyboard RGB (EC) + ColorMaker/Changer + cycle + docs"
-gh repo create omen-gaming-hub-linux --public --source=. --push
+gh repo create victus-suite --public --source=. --remote=origin --push
 ```
 
 > `gh` на машине есть, но **не авторизован** — нужен `gh auth login`.

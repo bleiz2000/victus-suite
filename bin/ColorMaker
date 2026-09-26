@@ -14,12 +14,12 @@ Usage:
 """
 
 import os
-import re
 import sys
 
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _HERE)
 import victus_log as vlog  # noqa: E402
+import victus_palette as pal  # noqa: E402
 from i18n import t  # noqa: E402
 
 TOOL = "ColorMaker"
@@ -27,58 +27,8 @@ TOOL = "ColorMaker"
 CONF_DIR = vlog.config_dir()
 CONF = os.path.join(CONF_DIR, "colors.conf")
 
-BUILTIN = {
-    "red": (255, 0, 0),
-    "fire": (255, 50, 0),
-    "scarlet": (255, 20, 20),
-    "darkred": (139, 0, 0),
-    "green": (0, 255, 0),
-    "blue": (0, 0, 255),
-    "white": (255, 255, 255),
-    "black": (0, 0, 0),
-    "off": (0, 0, 0),
-    "yellow": (255, 255, 0),
-    "cyan": (0, 255, 255),
-    "magenta": (255, 0, 255),
-    "pink": (255, 105, 180),
-    "hotpink": (255, 20, 147),
-    "lightpink": (255, 192, 203),
-    "rose": (255, 0, 127),
-    "purple": (128, 0, 128),
-    "violet": (143, 0, 255),
-    "indigo": (75, 0, 130),
-    "orange": (255, 165, 0),
-    "coral": (255, 127, 80),
-    "salmon": (250, 128, 114),
-    "crimson": (220, 20, 60),
-    "maroon": (128, 0, 0),
-    "gold": (255, 215, 0),
-    "lime": (0, 255, 0),
-    "teal": (0, 128, 128),
-    "skyblue": (135, 206, 235),
-    "turquoise": (64, 224, 208),
-    "navy": (0, 0, 128),
-    "olive": (128, 128, 0),
-    "gray": (128, 128, 128),
-    "silver": (192, 192, 192),
-    "brown": (165, 42, 42),
-    "tan": (210, 180, 140),
-    "beige": (245, 245, 220),
-    "ivory": (255, 255, 240),
-    "lavender": (230, 230, 250),
-    "plum": (221, 160, 221),
-    "orchid": (218, 112, 214),
-    "chocolate": (210, 105, 30),
-    "wine": (114, 47, 55),
-    "neonpurple": (191, 64, 255),
-    "neonpink": (255, 24, 160),
-    "neongreen": (57, 255, 20),
-    "iceblue": (99, 203, 255),
-    "warmwhite": (255, 244, 229),
-    "coolwhite": (220, 240, 255),
-}
-
-NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+BUILTIN = pal.BUILTIN
+NAME_RE = pal.NAME_RE
 
 
 def die(msg):
@@ -88,32 +38,7 @@ def die(msg):
 
 
 def load():
-    colors = dict(BUILTIN)
-    if os.path.exists(CONF):
-        with open(CONF) as f:
-            for lineno, line in enumerate(f, 1):
-                raw = line.rstrip("\n")
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" not in line:
-                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: no '=' in {raw!r}")
-                    continue
-                name, val = line.split("=", 1)
-                try:
-                    rgb = tuple(int(x) for x in val.split(","))
-                except ValueError:
-                    vlog.log("warn", TOOL, f"{CONF}:{lineno}: bad rgb {val!r}")
-                    continue
-                if len(rgb) == 3 and all(0 <= v <= 255 for v in rgb):
-                    colors[name.strip()] = rgb
-                else:
-                    vlog.log(
-                        "warn",
-                        TOOL,
-                        f"{CONF}:{lineno}: out of range rgb {rgb} (line {raw!r})",
-                    )
-    return colors
+    return pal.all_colors(CONF)
 
 
 def save(colors):
@@ -129,14 +54,16 @@ def save(colors):
 
 
 def parse_rgb(args):
-    if len(args) == 1 and args[0].startswith("#") and len(args[0]) == 7:
-        h = args[0][1:]
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    if len(args) == 1:
+        rgb = pal.parse(args[0])
+        if rgb is not None:
+            return rgb
     if len(args) == 3:
         vals = [int(a) for a in args]
         if all(0 <= v <= 255 for v in vals):
             return tuple(vals)
     die(t("cm.bad_rgb"))
+
 
 
 def main():
