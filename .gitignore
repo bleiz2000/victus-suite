@@ -2,6 +2,9 @@
 logs/
 state/
 
+# TUI screenshot artifacts (save_screenshot writes SVG into cwd)
+victus-suite_*.svg
+
 # python
 __pycache__/
 *.py[cod]

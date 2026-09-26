@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""victus_tui — Textual-интерфейс victus-suite (пока: подсветка клавиатуры).
+
+Запуск:  victus_tui          (симлинк из install.sh)
+         VICTUS_DRY_RUN=1 victus_tui   # без записи в EC
+
+TUI = обёртка над CLI: каждая кнопка вызывает victus-kbd / Changer / ColorMaker.
+"""
+
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+
+import victus_log as vlog  # noqa: E402
+from i18n import t  # noqa: E402
+
+
+def main():
+    vlog.log_info("victus_tui", f"start euid={os.geteuid()}")
+    try:
+        from tui.screens import VictusApp
+    except ModuleNotFoundError as e:
+        vlog.log_error("victus_tui", f"missing dependency: {e}", exc=False)
+        print(t("tui.need_textual", err=e), file=sys.stderr)
+        sys.exit(1)
+    VictusApp().run()
+    vlog.log_info("victus_tui", "exit")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        vlog.log_info("victus_tui", "interrupted")
