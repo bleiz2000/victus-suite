@@ -28,7 +28,7 @@ python -m pip install --user textual      # движок TUI (8.x)
 mkdir -p ~/Work && cd ~/Work
 curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.0.0-beta/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
-./install.sh                              # симлинки в ~/.local/bin
+./install.sh                              # симлинки + ярлык в меню
 ```
 
 **Из исходников:**
@@ -37,6 +37,11 @@ tar xzf vs.tar.gz && cd victus-suite
 git clone https://github.com/bleiz2000/victus-suite.git ~/Work/victus-suite
 cd ~/Work/victus-suite && ./install.sh
 ```
+
+`./install.sh` также создаёт ярлык **`Victus Suite`** в меню приложений
+(`~/.local/share/applications/victus-suite.desktop`, `Exec=… --window`,
+чёрно-белая иконка в `~/.local/share/icons/hicolor/`) — запускайте из
+лаунчера, терминал не нужен.
 
 **Опционально — запись в EC без пароля** (иначе каждый запрос — ввод sudo):
 
@@ -54,7 +59,9 @@ victus_tui --tray      # только фоновый демон + иконка �
 victus-tray            # трей: открыть окно / старт-стоп эффекта / выход
 ```
 
-Удаление: `./install.sh --remove`.
+…или просто нажмите **Victus Suite** в меню приложений.
+
+Удаление: `./install.sh --remove` (симлинки, ярлык и иконки).
 
 ## Что уже работает сейчас
 
@@ -173,7 +180,9 @@ victus-suite/
 ├── ROADMAP.md                    ← следующий этап: скрипт → устанавливаемое приложение
 ├── TZ.md                         ← полное техническое задание
 ├── VERSION                       ← 1.0.0-beta (источник правды по версии)
-├── install.sh                    ← ./install.sh [--remove] → симлинки в ~/.local/bin
+├── install.sh                    ← ./install.sh [--remove] → симлинки + ярлык меню + иконки
+├── share/
+│   └── icons/                    ← ч/б иконка: victus-suite.svg, PNG для hicolor, make_icon.py
 ├── LICENSE                       ← MIT
 ├── bin/                          ← все команды (сюда класть новые)
 │   victus-kbd  Changer  ColorMaker  victus-report

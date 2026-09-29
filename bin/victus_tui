@@ -112,10 +112,22 @@ def main():
     if "--tray" in args:
         return run_tray()
     if "--window" in args:
-        if not spawn_window():
-            print(t("tui.no_terminal"), file=sys.stderr)
-            return 1
-        return 0
+        if spawn_window():
+            return 0
+        # ни foot, ни kitty — при запуске из меню stderr никто не видит,
+        # поэтому докрикиваемся уведомлением
+        msg = t("tui.no_terminal")
+        print(msg, file=sys.stderr)
+        try:
+            if shutil.which("notify-send"):
+                subprocess.run(
+                    ["notify-send", "-u", "critical", "-a", "Victus Suite",
+                     t("tui.app_title"), msg],
+                    timeout=5, check=False,
+                )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return 1
 
     vlog.log_info(TOOL, f"start euid={os.geteuid()} (static, no autostart)")
     try:

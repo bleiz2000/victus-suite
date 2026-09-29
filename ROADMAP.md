@@ -60,15 +60,23 @@
 
 ## R2. Нормальный установщик (1 день)
 
-- [ ] `install.sh` → `make install` / `install.sh` с реальными шагами:
-      зависимости, пакет, **автогенерация sudoers-правила** (с проверкой
-      `visudo -c` и откатом при ошибке), `.desktop`-файл, автозапуск.
-- [ ] `share/applications/victus-suite.desktop`
-      (`Exec=victus_tui --window`, `Icon=victus-suite`, категории Utility/HardwareSettings).
-- [ ] `share/icons/hicolor/…/victus-suite.png` — нарисовать иконку (16/32/48/128/256).
-- [ ] `uninstall`: убрать пакет, `.desktop`, автозапуск, sudoers-правило, `/var/log` не трогать.
-- [ ] Проверка окружения перед установкой: Arch/Debian/Fedora, наличие
-      `python≥3.11`, `textual`, `ayatana-appindicator3`, Wayland/X11, гиперсессор
+- [x] **Меню приложений — ✅ сделано (v1.0.0-beta):** `./install.sh` генерирует
+      `~/.local/share/applications/victus-suite.desktop`
+      (`Name=Victus Suite`, `Exec=<root>/bin/victus_tui --window`,
+      `Terminal=false`, `Categories=Settings;HardwareSettings;`),
+      копирует иконки в `~/.local/share/icons/hicolor/`, обновляет кэши
+      (`update-desktop-database`, `gtk-update-icon-cache`), `--remove` всё чистит.
+- [x] **Иконка — ✅ сделана (v1.0.0-beta):** чёрно-белая минималистичная «V»
+      на чёрной плитке; исходник `share/icons/victus-suite.svg`, PNG 16…512 в
+      `share/icons/hicolor/`, генератор `share/icons/make_icon.py` (PIL,
+      supersampling 4×), есть и scalable SVG.
+- [ ] `install.sh` → `make install`: реальная проверка зависимостей перед
+      установкой (сейчас ставит «вслепую»).
+- [ ] Автогенерация sudoers-правила (с проверкой `visudo -c` и откатом при ошибке).
+- [ ] Полноценный `uninstall`: пакет + `.desktop` + автозапуск + sudoers
+      (сейчас `--remove` убирает симлинки, ярлык и иконки — sudoers вручную).
+- [ ] Проверка окружения: Arch/Debian/Fedora, наличие `python≥3.11`,
+      `textual`, `ayatana-appindicator3`, Wayland/X11, гиперсессор
       (Hyprland/Sway/GNOME/KDE) — с понятным сообщением, чего не хватает.
 
 **Критерий приёмки:** на чистой машине `git clone … && ./install.sh` →

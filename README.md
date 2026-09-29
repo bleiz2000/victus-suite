@@ -28,7 +28,7 @@ python -m pip install --user textual      # TUI engine (8.x)
 mkdir -p ~/Work && cd ~/Work
 curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.0.0-beta/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
-./install.sh                              # symlinks into ~/.local/bin
+./install.sh                              # symlinks + menu entry
 ```
 
 **From source:**
@@ -37,6 +37,11 @@ tar xzf vs.tar.gz && cd victus-suite
 git clone https://github.com/bleiz2000/victus-suite.git ~/Work/victus-suite
 cd ~/Work/victus-suite && ./install.sh
 ```
+
+`./install.sh` also creates the **`Victus Suite`** entry in your application
+menu (`~/.local/share/applications/victus-suite.desktop`, `Exec=… --window`,
+black-and-white icon in `~/.local/share/icons/hicolor/`) — launch it from the
+launcher, no terminal needed.
 
 **Optional — passwordless EC writes** (otherwise every write asks for sudo):
 
@@ -54,7 +59,9 @@ victus_tui --tray      # background daemon + tray icon only
 victus-tray            # tray icon: open window / start-stop effect / quit
 ```
 
-Remove with `./install.sh --remove`.
+…or simply press **Victus Suite** in your application menu.
+
+Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 
 ## What works right now
 
@@ -174,7 +181,9 @@ victus-suite/
 ├── ROADMAP.md                    ← next stage: script → installable app
 ├── TZ.md                         ← full technical specification
 ├── VERSION                       ← 1.0.0-beta (single source of truth)
-├── install.sh                    ← ./install.sh [--remove] → symlinks to ~/.local/bin
+├── install.sh                    ← ./install.sh [--remove] → symlinks + menu entry + icons
+├── share/
+│   └── icons/                    ← black&white icon: victus-suite.svg, hicolor PNGs, make_icon.py
 ├── LICENSE                       ← MIT
 ├── bin/                          ← all commands (put new ones here)
 │   victus-kbd  Changer  ColorMaker  victus-report
