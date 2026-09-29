@@ -1,11 +1,18 @@
-"""Вкладка «Подсветка»: палитра, HSV-слайдеры, вкл/выкл, эффекты.
+"""Вкладка «Подсветка» v1.2 — три панели по утверждённому макету.
+
+Слева  PRESETS            — вертикальный список цветов с квадратом превью.
+В центре COLOR PICKER      — ASCII-слайдеры Hue/Saturation/Brightness,
+                             квадратный (1:1) предпросмотр, H/S/V/Hex,
+                             кнопки [ Apply ] [ Copy HEX ] [ Save Preset ].
+Справа  LIGHTING EFFECTS   — режимы [ ] Static [*] Cycle [ ] Fade,
+                             Custom Effect Creator с синусоидой,
+                             Effect Speed, [ Start ] / [ Stop ].
 
 TUI = обёртка над CLI: запись цвета/эффектов идёт только через victus-kbd,
 палитра — через victus_palette (без дублей). Состояние: state/last_state.json.
 
-Дизайн-решение: слайдеры рисуют предпросмотр (свотч/hex), а в EC цвет
-уходит только по явному действию — «Применить», клик пресета, Вкл/Выкл,
-«Старт» эффекта. Это одна команда = одно действие, как в CLI.
+Слайдеры рисуют предпросмотр, в EC цвет уходит только по явному действию:
+«Apply», клик пресета, Вкл/Выкл, «Start» эффекта.
 """
 
 import asyncio
@@ -13,21 +20,17 @@ import datetime
 import json
 import os
 
-from textual import on
+from rich.cells import cell_len
+from rich.text import Text
+from textual import on, work
 from textual.app import ComposeResult
-from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.content import Content
 from textual.reactive import reactive
-from textual.widgets import (
-    Button,
-    Input,
-    Label,
-    RadioButton,
-    RadioSet,
-    Static,
-    Switch,
-)
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, Static, Switch
 
-from tui.slider import MiniSlider
+from tui.slider import AsciiSlider, SineWave
 
 import victus_log as vlog
 import victus_palette as pal
@@ -42,6 +45,42 @@ COLORMAKER = os.path.join(_BIN, "ColorMaker")
 STATE_FILE = os.path.join(vlog.state_dir(), "last_state.json")
 
 EFFECT_IDS = {"effect-none": "none", "effect-cycle": "cycle", "effect-fade": "fade"}
+MODE_IDS = ("effect-none", "effect-cycle", "effect-fade")
+MODE_NAMES = {
+    "effect-none": t("tui.mode_static"),
+    "effect-cycle": t("tui.mode_cycle"),
+    "effect-fade": t("tui.mode_fade"),
+}
+
+NAME_WIDTH = 10
+LABEL_WIDTH = NAME_WIDTH + 4
+
+
+class RowButton(Button):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.styles.line_pad = 0
+
+    def get_content_width(self, container, viewport) -> int:
+        lines = self.label.plain.splitlines()
+        return max((cell_len(line) for line in lines), default=0)
+
+    def on_mount(self) -> None:
+        self.styles.line_pad = 0
+
+
+def mode_label(mode_id: str, active: bool) -> str:
+    mark = "*" if active else " "
+    gap = "" if mode_id == MODE_IDS[-1] else "  "
+    return f"[{mark}] {MODE_NAMES[mode_id]}{gap}"
+
+
+def preset_label(name: str, rgb) -> Text:
+    text = Text(f"{name:<{NAME_WIDTH}.{NAME_WIDTH}} ")
+    text.append("[", style="dim")
+    text.append("■", style=f"bold {pal.to_hex(rgb)}")
+    text.append("]", style="dim")
+    return text
 
 
 def load_state():
@@ -98,6 +137,47 @@ def _sudo_hint(text):
     return text
 
 
+class SavePresetScreen(ModalScreen):
+    """Диалог имени для [ Save Preset ]."""
+
+    BINDINGS = [("escape", "cancel", None)]
+
+    def __init__(self, hex_color: str):
+        super().__init__()
+        self.hex_color = hex_color
+
+    def compose(self) -> ComposeResult:
+        box = Vertical(id="save-box")
+        box.border_title = t("tui.save_title")
+        with box:
+            yield Static(Text(f"Hex: [{self.hex_color}]"), id="save-hex", classes="readout")
+            yield Input(placeholder=t("tui.name_placeholder"), id="name-input")
+            with Horizontal(id="save-actions"):
+                yield Button(Text(t("tui.btn_save")), id="save-ok")
+                yield Button(Text(t("tui.btn_cancel")), id="save-cancel")
+
+    def on_mount(self):
+        self.query_one("#name-input", Input).focus()
+
+    def _entered_name(self) -> str:
+        return self.query_one("#name-input", Input).value.strip().lower()
+
+    @on(Input.Submitted)
+    def submitted(self, event):
+        self.dismiss(self._entered_name() or None)
+
+    @on(Button.Pressed)
+    def pressed(self, event):
+        bid = event.button.id
+        if bid == "save-ok":
+            self.dismiss(self._entered_name() or None)
+        elif bid == "save-cancel":
+            self.dismiss(None)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class KbdTab(Vertical):
     power = reactive(True)
     color = reactive((255, 255, 255))
@@ -115,7 +195,7 @@ class KbdTab(Vertical):
         ):
             self.color = tuple(rgb)
         self.power = bool(state.get("power", True))
-        if state.get("effect") in ("none", "cycle"):
+        if state.get("effect") in ("none", "cycle", "fade"):
             self.effect = state["effect"]
         try:
             self.speed = min(5.0, max(0.2, float(state.get("speed", 1.0))))
@@ -124,87 +204,104 @@ class KbdTab(Vertical):
         self._sync_target = None
 
     def compose(self) -> ComposeResult:
-        with ScrollableContainer(id="kbd-scroll"):
-            yield from self._body()
-        yield Static(t("tui.status_ready"), id="status", classes="status")
-
-    def _body(self):
-        with Horizontal(classes="row top-row"):
-            yield Label(t("tui.power"), classes="row-label")
+        with Horizontal(id="body"):
+            yield from self._presets_panel()
+            yield from self._color_panel()
+            yield from self._effects_panel()
+        with Horizontal(id="statusline"):
+            with Horizontal(id="status-flow"):
+                yield Static("", id="color-tag")
+                yield Static("", id="status")
             yield Switch(value=self.power, id="power")
-            yield Static("", id="current-color")
 
-        yield Label(t("tui.presets"), classes="section-title")
-        with ScrollableContainer(id="palette-scroll"):
-            yield Grid(id="palette")
+    def _presets_panel(self):
+        panel = Vertical(classes="panel", id="presets-panel")
+        panel.border_title = t("tui.sec_presets")
+        with panel:
+            yield ScrollableContainer(id="preset-list")
 
-        yield Label(t("tui.picker"), classes="section-title")
-        with Vertical(classes="picker"):
-            with Horizontal(classes="slider-row"):
-                yield Label(t("tui.hue"), classes="slider-label")
-                yield MiniSlider(min=0, max=360, step=1, value=0, unit="°", id="hue")
-                yield Static("0°", id="hue-val", classes="slider-value")
-            with Horizontal(classes="slider-row"):
-                yield Label(t("tui.sat"), classes="slider-label")
-                yield MiniSlider(min=0, max=100, step=1, value=100, unit="%", id="sat")
-                yield Static("100%", id="sat-val", classes="slider-value")
-            with Horizontal(classes="slider-row"):
-                yield Label(t("tui.val"), classes="slider-label")
-                yield MiniSlider(min=0, max=100, step=1, value=100, unit="%", id="val")
-                yield Static("100%", id="val-val", classes="slider-value")
+    def _color_panel(self):
+        panel = Vertical(classes="panel", id="color-panel")
+        panel.border_title = t("tui.sec_picker")
+        with panel:
+            with Horizontal(id="picker-top"):
+                with Vertical(id="hsv-column"):
+                    yield from self._hsv_row("hue", t("tui.lab_hue"), 0, 360)
+                    yield from self._hsv_row("sat", t("tui.lab_sat"), 0, 100)
+                    yield from self._hsv_row("val", t("tui.lab_val"), 0, 100)
+                with Vertical(id="preview-column"):
+                    yield Static("", id="preview")
+                    with Vertical(id="readouts"):
+                        yield Static("H: 0", id="read-h", classes="readout")
+                        yield Static("S: 0", id="read-s", classes="readout")
+                        yield Static("V: 0", id="read-v", classes="readout")
+                        yield Static("Hex: [#000000]", id="read-hex", classes="readout")
+            with Horizontal(id="picker-actions"):
+                yield Button(Text(t("tui.btn_apply")), id="apply")
+                yield Button(Text(t("tui.btn_copy_hex")), id="copy-hex")
+                yield Button(Text(t("tui.btn_save_preset")), id="save-name")
 
-            yield Static("", id="swatch")
-            yield Static("", id="color-readout", classes="readout")
-            with Horizontal(classes="row"):
-                yield Button(t("tui.apply"), id="apply", variant="primary")
-                yield Button(t("tui.copy_hex"), id="copy-hex")
-                yield Input(placeholder=t("tui.name_placeholder"), id="name-input")
-                yield Button(t("tui.save_name"), id="save-name")
+    def _hsv_row(self, sid, label, lo, hi):
+        with Horizontal(classes="hsv-row", id=f"row-{sid}"):
+            yield Label(label, classes="hsv-label")
+            yield AsciiSlider(min=lo, max=hi, step=1, value=lo, id=sid)
+            yield Static(f"{lo}", id=f"{sid}-val", classes="hsv-value")
 
-        yield Label(t("tui.effects"), classes="section-title")
-        with Horizontal(classes="row effects-row"):
-            with RadioSet(id="effect"):
-                yield RadioButton(
-                    t("tui.effect_none"), id="effect-none", value=self.effect == "none"
-                )
-                yield RadioButton(
-                    t("tui.effect_cycle"), id="effect-cycle", value=self.effect == "cycle"
-                )
-                yield RadioButton(t("tui.effect_fade"), id="effect-fade", disabled=True)
-            with Vertical(classes="speed-box"):
-                with Horizontal(classes="slider-row"):
-                    yield Label(t("tui.speed"), classes="slider-label")
-                    yield MiniSlider(
-                        min=0.2, max=5.0, step=0.1, value=self.speed, id="speed"
+    def _effects_panel(self):
+        panel = Vertical(classes="panel", id="effects-panel")
+        panel.border_title = t("tui.sec_effects")
+        with panel:
+            with Horizontal(id="effect-modes"):
+                for mid in MODE_IDS:
+                    active = EFFECT_IDS[mid] == self.effect
+                    yield RowButton(
+                        Text(mode_label(mid, active)),
+                        id=mid,
+                        classes=f"mode{' on' if active else ''}",
                     )
-                    yield Static(f"{self.speed:.1f}", id="speed-val", classes="slider-value")
-                with Horizontal(classes="row"):
-                    yield Button(t("tui.start"), id="effect-start", variant="success")
-                    yield Button(t("tui.stop"), id="effect-stop", variant="error")
+            creator = Vertical(id="creator")
+            creator.border_title = t("tui.sec_creator")
+            with creator:
+                yield SineWave(speed=self.speed, id="sine")
+            with Horizontal(id="speed-row"):
+                yield Static(
+                    f"{t('tui.speed_label')} {self.speed:.1f}", id="speed-label"
+                )
+                yield AsciiSlider(
+                    min=0.2, max=5.0, step=0.1, value=self.speed, id="speed"
+                )
+            with Horizontal(id="effect-actions"):
+                yield Button(Text(t("tui.btn_start")), id="effect-start")
+                yield Button(Text(t("tui.btn_stop")), id="effect-stop")
 
     def on_mount(self):
         table = pal.all_colors()
-        palette = self.query_one("#palette")
+        listing = self.query_one("#preset-list", ScrollableContainer)
+        selected = None
         for name in sorted(table):
             rgb = table[name]
-            btn = Button(name, id=f"c-{name}", classes="swatch")
-            btn.styles.background = pal.to_hex(rgb)
-            btn.styles.color = "#000000" if luminance(rgb) > 0.5 else "#ffffff"
-            palette.mount(btn)
+            btn = RowButton(preset_label(name, rgb), id=f"c-{name}", classes="preset")
+            listing.mount(btn)
+            if rgb == self.color and selected is None:
+                selected = name
+        self._mark_selected(selected)
         self._sync_controls()
-        self._set_status(t("tui.status_ready"))
+
+    def _mark_selected(self, name):
+        for btn in self.query(".preset"):
+            btn.set_class(name is not None and btn.id == f"c-{name}", "selected")
 
     def _sync_controls(self):
         original = self.color
         h, s, v = pal.rgb_to_hsv(original)
         target = (round(h), round(s * 100), round(v * 100))
         self._sync_target = target
-        self.query_one("#hue", MiniSlider).set_value(target[0])
-        self.query_one("#sat", MiniSlider).set_value(target[1])
-        self.query_one("#val", MiniSlider).set_value(target[2])
-        self.query_one("#hue-val", Static).update(f"{target[0]}°")
-        self.query_one("#sat-val", Static).update(f"{target[1]}%")
-        self.query_one("#val-val", Static).update(f"{target[2]}%")
+        self.query_one("#hue", AsciiSlider).set_value(target[0])
+        self.query_one("#sat", AsciiSlider).set_value(target[1])
+        self.query_one("#val", AsciiSlider).set_value(target[2])
+        self.query_one("#hue-val", Static).update(f"{target[0]}")
+        self.query_one("#sat-val", Static).update(f"{target[1]}")
+        self.query_one("#val-val", Static).update(f"{target[2]}")
         self.color = original
         self._refresh_readout()
 
@@ -212,15 +309,16 @@ class KbdTab(Vertical):
         rgb = self.color
         hexv = pal.to_hex(rgb)
         h, s, v = pal.rgb_to_hsv(rgb)
-        self.query_one("#swatch").styles.background = hexv
-        self.query_one("#color-readout", Static).update(
-            f"rgb{rgb}   {hexv}   hsv({h:.0f}°, {s:.2f}, {v:.2f})"
-        )
-        self.query_one("#current-color", Static).update(hexv)
+        self.query_one("#preview").styles.background = hexv
+        self.query_one("#read-h", Static).update(f"H: {round(h)}")
+        self.query_one("#read-s", Static).update(f"S: {round(s * 100)}")
+        self.query_one("#read-v", Static).update(f"V: {round(v * 100)}")
+        self.query_one("#read-hex", Static).update(Text(f"Hex: [{hexv}]"))
+        self.query_one("#color-tag", Static).update(t("tui.color_tag", hex=hexv))
 
     def _set_status(self, text, error=False):
         st = self.query_one("#status", Static)
-        st.update(text)
+        st.update(Text(text))
         st.styles.color = "#ff6b6b" if error else "#7ee787"
 
     def _store(self):
@@ -238,16 +336,16 @@ class KbdTab(Vertical):
         )
 
     def _from_hsv_controls(self):
-        hue = self.query_one("#hue", MiniSlider).value
-        sat = self.query_one("#sat", MiniSlider).value
-        val = self.query_one("#val", MiniSlider).value
+        hue = self.query_one("#hue", AsciiSlider).value
+        sat = self.query_one("#sat", AsciiSlider).value
+        val = self.query_one("#val", AsciiSlider).value
         h, s, v = hue, sat / 100.0, val / 100.0
-        if self._sync_target == (h, sat, val):
+        if self._sync_target == (hue, sat, val):
             return
         self._sync_target = None
-        self.query_one("#hue-val", Static).update(f"{h:.0f}°")
-        self.query_one("#sat-val", Static).update(f"{s * 100:.0f}%")
-        self.query_one("#val-val", Static).update(f"{v * 100:.0f}%")
+        self.query_one("#hue-val", Static).update(f"{hue:.0f}")
+        self.query_one("#sat-val", Static).update(f"{sat:.0f}")
+        self.query_one("#val-val", Static).update(f"{val:.0f}")
         self.color = pal.hsv_to_rgb(h, s, v)
         self._refresh_readout()
 
@@ -269,6 +367,7 @@ class KbdTab(Vertical):
         self.color = rgb
         self.power = True
         self.query_one("#power", Switch).value = True
+        self._mark_selected(name)
         self._sync_controls()
         await self._apply_current()
 
@@ -281,6 +380,9 @@ class KbdTab(Vertical):
         ]
 
     async def _start_effect(self):
+        if self.effect == "fade":
+            self._set_status(t("tui.fade_unsupported"), error=True)
+            return
         if self.effect != "cycle":
             self._set_status(t("tui.effect_none_status"))
             return
@@ -290,7 +392,9 @@ class KbdTab(Vertical):
         args += ["--delay", f"{self.speed:.1f}", "--bg"]
         rc, out, err = await run_backend(args)
         if rc != 0:
-            self._set_status(_sudo_hint(err or out) or t("tui.effect_failed", rc=rc), error=True)
+            self._set_status(
+                _sudo_hint(err or out) or t("tui.effect_failed", rc=rc), error=True
+            )
             vlog.log_error(TOOL, f"effect rc={rc} err={err or out}", exc=False)
             return
         self._set_status(out or t("tui.effect_started"))
@@ -307,31 +411,34 @@ class KbdTab(Vertical):
         self.power = bool(event.value)
         self.run_worker(self._apply_current(), exclusive=True)
 
-    @on(MiniSlider.Changed)
+    @on(AsciiSlider.Changed)
     def slider_changed(self, event):
         sid = event.slider.id
         if sid == "speed":
             self.speed = round(event.value, 1)
-            self.query_one("#speed-val", Static).update(f"{self.speed:.1f}")
+            self.query_one("#speed-label", Static).update(
+                f"{t('tui.speed_label')} {self.speed:.1f}"
+            )
+            self.query_one("#sine", SineWave).speed = self.speed
             return
         if sid in ("hue", "sat", "val"):
             self._from_hsv_controls()
 
-    def _effect_changed(self, event):
-        pressed = event.pressed
-        if pressed is None or pressed.id not in EFFECT_IDS:
+    def _set_effect(self, mode_id):
+        if mode_id not in EFFECT_IDS:
             return
-        self.effect = EFFECT_IDS[pressed.id]
-
-    def on_radioset_changed(self, event):
-        self._effect_changed(event)
-
-    def on_radio_set_changed(self, event):
-        self._effect_changed(event)
+        self.effect = EFFECT_IDS[mode_id]
+        for mid in MODE_IDS:
+            btn = self.query_one(f"#{mid}", Button)
+            active = mid == mode_id
+            btn.label = Content.from_text(Text(mode_label(mid, active)))
+            btn.set_class(active, "on")
 
     async def on_button_pressed(self, event):
         bid = event.button.id or ""
-        if bid.startswith("c-"):
+        if bid in EFFECT_IDS:
+            self._set_effect(bid)
+        elif bid.startswith("c-"):
             await self._select_preset(bid[2:])
         elif bid == "apply":
             await self._apply_current()
@@ -348,10 +455,17 @@ class KbdTab(Vertical):
                 vlog.log("warn", TOOL, f"clipboard failed: {e}")
                 self._set_status(hexv)
         elif bid == "save-name":
-            await self._save_named_color()
+            self._prompt_save()
 
-    async def _save_named_color(self):
-        name = self.query_one("#name-input", Input).value.strip().lower()
+    @work(exclusive=True)
+    async def _prompt_save(self):
+        result = await self.app.push_screen(
+            SavePresetScreen(pal.to_hex(self.color)), wait_for_dismiss=True
+        )
+        if result:
+            await self._save_named_color(str(result))
+
+    async def _save_named_color(self, name):
         if not pal.NAME_RE.match(name):
             self._set_status(t("cm.name_rule"), error=True)
             return
@@ -365,8 +479,10 @@ class KbdTab(Vertical):
         )
         out, err = await proc.communicate()
         if proc.returncode != 0:
-            self._set_status(err.decode().strip() or t("tui.apply_failed", rc=proc.returncode), error=True)
+            self._set_status(
+                err.decode().strip() or t("tui.apply_failed", rc=proc.returncode),
+                error=True,
+            )
             return
-        self.query_one("#name-input", Input).value = ""
         self._set_status(out.decode().strip() or t("tui.saved"))
         vlog.log_info(TOOL, f"saved color {name}={self.color}")

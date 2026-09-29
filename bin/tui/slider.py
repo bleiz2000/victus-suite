@@ -1,23 +1,30 @@
-"""MiniSlider — простой слайдер для TUI (в Textual 8.2.8 нет виджета Slider).
+"""ASCII-виджеты TUI: AsciiSlider (прогресс-бар) и SineWave (синусоида).
 
-Поведение:
-  клик мышью по полосе — перейти к позиции;
-  колесо мыши / ← → — шаг;
-  Home / End — минимум / максимум;
-  значение + событие Changed (как у Slider.Changed).
+В Textual 8.2.8 нет виджета Slider, поэтому ползунок рисуем сами.
 
-Рендер: `──────●─────────` — маркер на позиции значения.
+AsciiSlider  `[======== ]`  — клик/драг мышью, колесо, ← →, Home/End.
+             ALLOW_SELECT=False: клик двигает ползунок, а не выделяет текст.
+
+SineWave     сглаженная синусоида (9 подуровней высоты внутри ячейки),
+             живая анимация, скорость = Effect Speed.
 """
 
+import math
+
+from rich.text import Text
 from textual import events
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 
+RAMP = ("▔", "▇", "▆", "▅", "▄", "▃", "▂", "▁")
 
-class MiniSlider(Widget):
+
+class AsciiSlider(Widget):
+    """Полоса `[==== ]`: значение 0..max, ширина = доступное место."""
+
     class Changed(Message):
-        def __init__(self, slider: "MiniSlider", value: float) -> None:
+        def __init__(self, slider: "AsciiSlider", value: float) -> None:
             super().__init__()
             self.slider = slider
             self.value = value
@@ -27,6 +34,7 @@ class MiniSlider(Widget):
             return self.slider.id
 
     can_focus = True
+    ALLOW_SELECT = False
     min = 0.0
     max = 1.0
     step = 1.0
@@ -49,6 +57,7 @@ class MiniSlider(Widget):
         self.max = float(max)
         self.step = float(step) or 1.0
         self.unit = unit
+        self._drag = False
         self.value = self._clamp(self._quantize(value))
 
     def _quantize(self, v: float) -> float:
@@ -67,30 +76,49 @@ class MiniSlider(Widget):
         if notify:
             self.post_message(self.Changed(self, new))
 
-    def render(self):
-        from rich.text import Text
-
-        width = max(self.size.width, 5)
+    @property
+    def fraction(self) -> float:
         span = self.max - self.min
-        frac = 0.0 if span <= 0 else (self.value - self.min) / span
-        pos = round(frac * (width - 1))
-        left = "─" * pos
-        right = "─" * (width - 1 - pos)
+        return 0.0 if span <= 0 else (self.value - self.min) / span
+
+    def render(self) -> Text:
+        width = max(self.size.width, 3)
+        inner = max(width - 2, 1)
+        filled = max(0, min(inner, round(self.fraction * inner)))
         text = Text()
-        text.append(left, style="dim")
-        text.append("●", style="bold cyan")
-        text.append(right, style="dim")
+        text.append("[", style="dim")
+        text.append("=" * filled, style="bold")
+        text.append(" " * (inner - filled))
+        text.append("]", style="dim")
         return text
 
-    def _emit(self):
-        self.post_message(self.Changed(self, self.value))
-
-    def on_click(self, event: events.Click):
+    def _set_from_x(self, x: int):
         if self.max <= self.min:
             return
-        x = max(0, min(event.x, self.size.width - 1))
-        frac = x / max(1, self.size.width - 1)
+        width = max(self.size.width, 3)
+        frac = max(0, min(x, width - 1)) / max(1, width - 1)
         self.set_value(self.min + frac * (self.max - self.min), notify=True)
+
+    def on_mouse_down(self, event: events.MouseDown):
+        if self.max <= self.min:
+            return
+        self._drag = True
+        self.capture_mouse(True)
+        self._set_from_x(event.x)
+        event.stop()
+        event.prevent_default()
+
+    def on_mouse_move(self, event: events.MouseMove):
+        if not self._drag:
+            return
+        self._set_from_x(event.x)
+        event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp):
+        if not self._drag:
+            return
+        self._drag = False
+        self.capture_mouse(False)
         event.stop()
 
     def on_key(self, event: events.Key):
@@ -122,3 +150,82 @@ class MiniSlider(Widget):
 
     def watch_value(self, value: float):
         self.refresh()
+
+
+MiniSlider = AsciiSlider
+
+
+class SineWave(Widget):
+    """Живая синусоида: каждый столбец — блочный глиф своего подуровня."""
+
+    period = reactive(0.0)
+    speed = reactive(1.0)
+    phase = reactive(0.0)
+
+    def __init__(
+        self,
+        period: float = 0.0,
+        speed: float = 1.0,
+        *,
+        animate: bool = True,
+        id: str | None = None,
+        classes: str | None = None,
+    ):
+        super().__init__(id=id, classes=classes)
+        self.period = float(period)
+        self.speed = float(speed)
+        self._animate = animate
+        self._timer = None
+
+    def on_mount(self):
+        if self._animate:
+            self._timer = self.set_interval(0.12, self._tick)
+
+    def _tick(self):
+        self.phase = (self.phase + 0.22 * max(self.speed, 0.05)) % (2 * math.pi)
+
+    def render(self) -> Text:
+        width = max(self.size.width, 4)
+        height = max(self.size.height, 1)
+        mid = (height - 1) / 2.0
+        amp = max(mid, 0.5) * 0.8
+        period = self.period if self.period >= 4.0 else float(width) / 1.5
+        rows = [[" "] * width for _ in range(height)]
+
+        def glyph(y: float) -> str:
+            row = int(max(0.0, min(height - 1e-6, y)))
+            frac = y - row
+            return RAMP[max(0, min(7, int(frac * 8)))]
+
+        def put(x: int, y: int, char: str):
+            if 0 <= x < width and 0 <= y < height:
+                rows[y][x] = char
+
+        prev = None
+        for x in range(width):
+            y = mid + amp * math.sin((2 * math.pi * x) / period + self.phase)
+            y = max(0.0, min(height - 1e-6, y))
+            row = int(y)
+            if prev is not None and prev != row:
+                step = 1 if row > prev else -1
+                for between in range(prev, row, step):
+                    put(x, between, "│")
+            put(x, row, glyph(y))
+            prev = row
+        text = Text()
+        for i, line in enumerate(rows):
+            if i:
+                text.append("\n")
+            text.append("".join(line))
+        return text
+
+    def watch_phase(self, phase: float):
+        self.refresh()
+
+    def watch_speed(self, speed: float):
+        self.refresh()
+
+    def on_unmount(self):
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
