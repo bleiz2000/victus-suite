@@ -24,7 +24,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # TUI engine (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/latest/download/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.0.0-beta/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # symlinks into ~/.local/bin
 ```
@@ -231,7 +231,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # движок TUI (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/latest/download/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.0.0-beta/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # симлинки в ~/.local/bin
 ```
