@@ -554,15 +554,22 @@ git commit -m "v0.1: keyboard RGB (EC) + ColorMaker/Changer + cycle + docs"
 gh repo create victus-suite --public --source=. --remote=origin --push
 ```
 
-> `gh` на машине есть, но **не авторизован** — нужен `gh auth login`.
+> `gh` на машине есть и **авторизован** (аккаунт `bleiz2000`) —
+> пуш и релизы (`gh release create`) идут без доп. настроек.
 
 ```
 victus-suite/
 ├── TZ.md                 это задание
-├── README.md             быстрый старт
-├── install.sh            ./install.sh [--remove] → симлинки в ~/.local/bin
+├── README.md             быстрый старт (English, primary)
+├── README.ru.md          русская версия
+├── ROADMAP.md            следующий этап: скрипт → устанавливаемое приложение
+├── VERSION               1.0.0-beta
+├── install.sh            ./install.sh [--remove] → симлинки + ярлык «Victus Suite» + иконки
+├── share/
+│   └── icons/            ч/б иконка: victus-suite.svg, PNG 16..512, make_icon.py
 ├── bin/                  исполняемые файлы (сюда «падают» все новые команды)
 │   victus-kbd  ColorMaker  Changer  victus-report  victus_log.py
+│   victus_tui  victusd  victus-tray  tui/
 ├── config/               всё пользовательское (colors.conf, profiles.d/, curves.d/)
 ├── logs/                 victus.log (+ .1..5), журналы демона, debug-трейсы
 ├── state/                report-*.txt, state.json, ec-backup.bin
@@ -577,7 +584,7 @@ victus-suite/
 | PRJ-04 | Всё пользовательское — в `config/` |
 | PRJ-05 | Путь определяется по местоположению скрипта (`realpath`), а не по `$HOME` — симлинк из `~/.local/bin` работает и указывает в проект |
 | PRJ-06 | Override'ы: `VICTUS_LOG_DIR`, `VICTUS_STATE_DIR`, `VICTUS_CONFIG_DIR`, `VICTUS_LOG` (уровень) |
-| PRJ-07 | Внешние команды не требуют установки в систему: `./install.sh` только симлинки |
+| PRJ-07 | Внешние команды не требуют установки в систему: `./install.sh` ставит симлинки, ярлык в меню и иконки |
 | PRJ-08 | Демон/пакеты в релизе используют XDG (`~/.local/state/victus`), проектная раскладка — режим разработки |
 
 **Автономность агента:** агент сам создаёт структуру, сам пишет логи в `logs/`,
@@ -634,7 +641,9 @@ nvidia-smi
 | Запись в EC | `bin/victus-kbd` | `ec_ready()`, гейт «euid!=0 → работаем, если ec_ready() или cmd==stop»; `cycle --delay ≥ 0.05` |
 | Фон | `bin/victusd` | unix-сокет `$XDG_RUNTIME_DIR/victus-suite-<uid>.sock`, счётчик `k` идёт с той же периодичностью, что цикл клавиатуры; `--verbose`, `--quit`; автостарт из `victus_tui` |
 | Трей | `bin/victus-tray` | AyatanaAppIndicator3: открыть окно / старт-стоп / выход; `victus_tui --tray` |
-| Точка входа | `bin/victus_tui` | без флагов — в терминале; `--window` — float 960×540 (foot, запасной kitty); `--tray` — только демон+трей |
+| Точка входа | `bin/victus_tui` | без флагов — в терминале; `--window` — float 960×540 (foot, запасной kitty); `--tray` — только демон+трей; без терминала шлёт `notify-send` |
+| Меню приложений | `install.sh` + `share/icons/` | `./install.sh` генерирует `$XDG_DATA_HOME/applications/victus-suite.desktop` (`Name=Victus Suite`, `Exec=<root>/bin/victus_tui --window`, `Terminal=false`, `StartupWMClass=victus-suite`), ставит иконки в `$XDG_DATA_HOME/icons/hicolor/{16..512,scalable}/apps/victus-suite.*`, обновляет кэши; `--remove` убирает ярлык и иконки |
+| Иконка | `share/icons/` | чёрно-белая: плитка `#111` + белая «V»; исходник `victus-suite.svg`, PNG 16…512 (генератор `make_icon.py`, PIL, supersampling 4×), есть scalable SVG |
 
 **Жёсткого автозапуска нет.** `victusd` поднимается, когда нужен, и умирает
 по `--quit`/закрытию последнего клиента; автозапуск при входе в систему —
@@ -656,6 +665,10 @@ nvidia-smi
 6. **Тесты последовательные:** сьюты делят сокет и `last_state.json`,
    параллельный запуск даёт ложные падения. Перед прогоном — `killer.py`
    (`/tmp/opencode/v2/`), после — сброс `state/last_state.json` в дефолт.
+7. **`.desktop` не хранится в git — его генерирует `./install.sh`**, потому что
+   `Exec` должен быть абсолютным путём к конкретному клону. Переехал/переклонировал
+   проект → снова `./install.sh`. Иконки лежат в репозитории (`share/icons/`)
+   и копируются в `hicolor`, а не ссылаются на папку проекта.
 
 ### 14.3. Порядок входа нового агента
 

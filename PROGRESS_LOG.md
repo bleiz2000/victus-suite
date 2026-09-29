@@ -13,14 +13,14 @@
 | Поле | Значение |
 |---|---|
 | **Фаза** | **v1.0.0-beta — этап закрыт**: Bento-TUI 960×540, спокойный режим, динамическая амплитуда от скорости, умная проверка прав, `victusd` + `victus-tray`, **ярлык «Victus Suite» в меню приложений + ч/б иконка**. Документы обновлены (`README.md` EN / `README.ru.md` RU, `ROADMAP.md`, `TZ.md`, `VERSION`), **коммиты + тег + GitHub Release `v1.0.0-beta`** |
-| **Ветка / коммит** | `main` @ см. `git log -1` — коммиты `release(v1.0.0-beta)`, `docs: README разделён`, `feat: .desktop + иконка` |
-| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релиз `v1.0.0-beta` (prerelease, артефакт `victus-suite.tar.gz`) |
+| **Ветка / коммит** | `main` @ `8a21511 feat(install): ярлык «Victus Suite» …` (запушен) |
+| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релиз `v1.0.0-beta` (prerelease, артефакт `victus-suite.tar.gz` **пересобран 20:36**, 136 262 байта, содержит `share/icons/` и `README.ru.md`) |
 | **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; реальная проверка цикла `--delay 1.25` vs `--delay 0.05` на EC ✅; **`./install.sh` → ярлык `Victus Suite` + иконка, `desktop-file-validate` = VALID** ✅ |
 | **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5) |
 | **Не обёрнуто кодом** | фены (hwmon7), температуры, режимы питания — **НЕ трогаем** |
 | **Следующий этап** | `ROADMAP.md`: R2 (остатки: проверка зависимостей, sudoers-генерация, `make install`) → R3 systemd --user + трей → R4 релизы/AUR → R5 тесты в CI |
 | **Известные косяки** | 18 неиспользуемых ключей `tui.*` в локалях; навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
-| **Последнее изменение** | 2026-09-29 20:31 +04 |
+| **Последнее изменение** | 2026-09-29 20:41 +04 |
 
 ---
 
@@ -51,7 +51,22 @@
    запуск из меню, удаление), дерево файлов (`share/icons/`);
    `ROADMAP.md` R2 — пункты «меню» и «иконка» отмечены сделанными;
    `PROGRESS_LOG.md`.
-5. **Коммит + пуш в `bleiz2000/victus-suite`.**
+5. **Коммит + пуш в `bleiz2000/victus-suite`** — `8a21511 feat(install): …`
+   (включая `config/locale` → `ru`, дефолт как в документах).
+6. **Артефакт релиза пересобран** из `HEAD` (`git archive --prefix=victus-suite/`)
+   и залит `gh release upload --clobber`: теперь внутри `README.md`,
+   `README.ru.md`, `install.sh` и **9 файлов иконок**, 136 262 байта
+   (было 94 320). Notes релиза дополнены пунктами про меню и иконку (EN+RU).
+   **Тег `v1.0.0-beta` НЕ переносился** (без force-push) — артефакт чуть новее
+   тегового коммита, содержимое = `main`.
+7. **Документы добиты до конца:** `TZ.md` §14.1 — строки «Меню приложений» и
+   «Иконка» + `victus_tui` (notify-send), §14.2 — правило 7 (`.desktop`
+   генерируется, не хранится в git), дерево проекта (`README.ru.md`, `ROADMAP.md`,
+   `VERSION`, `share/`, `victus_tui/victusd/victus-tray/tui/`), PRJ-07,
+   «`gh` авторизован»; `START_DEVELOPMENT.md` — строка install.sh в §2.1,
+   §2.3 (R2 частично закрыт), §8 (комментарий команды);
+   `ROADMAP.md` — «Где мы сейчас» (строка «Меню», «Установка», «Дистрибуция»)
+   и критерий приёмки R2 (ярлык должен открываться).
 
 ### Изменённые файлы
 
@@ -59,7 +74,8 @@
 `refresh_caches`), `bin/victus_tui` (notify-send fallback),
 `share/icons/make_icon.py` + `share/icons/victus-suite.svg` +
 `share/icons/hicolor/**` (новые), `README.md`, `README.ru.md`,
-`ROADMAP.md`, `PROGRESS_LOG.md`.
+`ROADMAP.md`, `TZ.md`, `START_DEVELOPMENT.md`, `PROGRESS_LOG.md`,
+`config/locale` (`en` → `ru`).
 
 ### Костыли / нюансы / ошибки
 
@@ -76,12 +92,12 @@
 
 ### Следующий шаг (план)
 
-1. Проверить вживую: `./install.sh` → открыть лаунчер → «Victus Suite» →
-   окно 960×540 открылось, иконка на месте.
-2. `git push` (если ещё не пушено) и `gh release edit v1.0.0-beta` — артефакт
-   релиза собран от тега **без** `share/icons` и `README.ru.md`; пересобрать
-   можно только переносом тега (force-push) — спросить пользователя.
-3. Продолжать `ROADMAP.md` R2: проверка зависимостей + генерация sudoers.
+1. Проверить вживую: `gtk-launch victus-suite` (или `gio launch
+   ~/.local/share/applications/victus-suite.desktop`) → окно 960×540,
+   иконка на месте. Готовая команда выдана пользователю.
+2. Остатки `ROADMAP.md` R2: проверка зависимостей перед установкой,
+   генерация sudoers с `visudo -c`, `make install`, полноценный `uninstall`.
+3. Дальше R3 (systemd --user + автозапуск трей) — после отмашки.
 
 ---
 
@@ -399,6 +415,10 @@
 Иконка: `share/icons/make_icon.py` → SVG + PNG 16…512 (чёрная плитка + белая «V»).
 `victus_tui --window` без терминала докрикивается `notify-send`.
 README EN/RU, ROADMAP R2 (2 пункта ✓). `desktop-file-validate` = VALID.
+Коммит `8a21511` запушен; артефакт релиза пересобран из `main`
+(136 262 байта, без force-push тега); документы добиты: `TZ.md` §14
+(строки «Меню»/«Иконка», правило 7, дерево, PRJ-07),
+`START_DEVELOPMENT.md`, `ROADMAP.md` («Где мы сейчас» + критерий R2).
 
 ### 2026-09-29 19:55 — v1.0.0-beta: фиксация этапа, документы, релиз
 См. запись выше. Скорость → задержка цикла (инверсия исправлена,

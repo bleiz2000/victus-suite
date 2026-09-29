@@ -17,10 +17,11 @@
 |---|---|
 | Код | `bin/` — набор исполняемых файлов, импортирующих друг друга через `sys.path.insert` |
 | Установка | `./install.sh` кладёт симлинки в `~/.local/bin` |
+| Меню приложений | ✅ есть: `./install.sh` → `victus-suite.desktop` (`Victus Suite`) + ч/б иконка в `hicolor` |
 | Права | ручной sudoers (`/etc/sudoers.d/victus-suite`) или запрос пароля |
 | Фон | `victusd` (unix-сокет) + `victus-tray` (AyatanaAppIndicator3), стартуют из TUI вручную |
 | UI | `victus_tui` — Textual, окно 960×540 (`--window`) или терминал |
-| Дистрибуция | только `git clone` |
+| Дистрибуция | `git clone` либо артефакт GitHub Release `v1.0.0-beta` (`victus-suite.tar.gz`) |
 | Тесты | 6 смоук-сьютов в `/tmp/opencode/v2/` (не в репозитории), 186 проверок |
 
 Что это значит: приложение **работает**, но **не устанавливается само**, не
@@ -80,8 +81,10 @@
       (Hyprland/Sway/GNOME/KDE) — с понятным сообщением, чего не хватает.
 
 **Критерий приёмки:** на чистой машине `git clone … && ./install.sh` →
-`victus_tui --window` открывается, трей-иконка есть, повторный запуск
-установщика идемпотентен, `./install.sh --remove` не оставляет мусора.
+в меню приложений есть **Victus Suite** с ч/б иконкой и она открывается
+(`gtk-launch victus-suite`), `victus_tui --window` открывается, трей-иконка
+есть, повторный запуск установщика идемпотентен,
+`./install.sh --remove` не оставляет мусора.
 
 ---
 
