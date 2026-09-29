@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""victus-tray — иконка подсветки в трее (AyatanaAppIndicator3).
+
+Меню: открыть окно TUI / старт-стоп эффекта / выход. Разговор с фоновым
+демоном (bin/victusd) — короткие синхронные запросы по unix-сокету.
+
+Запуск:  victus-tray          (или victus_tui --tray)
+         victus-tray --quit    # убрать иконку, демон не трогает
+"""
+
+import os
+import subprocess
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+
+import victus_log as vlog  # noqa: E402
+from i18n import t  # noqa: E402
+from tui import core  # noqa: E402
+
+TOOL = "victus-tray"
+TUI = os.path.join(_HERE, "victus_tui")
+
+
+def _require_gi():
+    import gi
+
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3, GLib, Gtk
+
+    return AyatanaAppIndicator3, GLib, Gtk
+
+
+class Tray:
+    def __init__(self, AppIndicator3, GLib, Gtk):
+        self.AppIndicator3 = AppIndicator3
+        self.GLib = GLib
+        self.Gtk = Gtk
+        self.indicator = AppIndicator3.Indicator.new(
+            "victus-suite",
+            "preferences-desktop-keyboard",
+            AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+        )
+        self.indicator.set_title("victus-suite")
+        self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self._build_menu()
+        GLib.timeout_add_seconds(2, self._tick)
+        self._tick()
+
+    def _build_menu(self):
+        Gtk = self.Gtk
+        menu = Gtk.Menu()
+
+        def item(label, cb):
+            it = Gtk.MenuItem(label=label)
+            it.connect("activate", cb)
+            menu.append(it)
+            return it
+
+        self.show_item = item(t("tui.tray_show"), self.on_show)
+        menu.append(Gtk.SeparatorMenuItem())
+        self.start_item = item(t("tui.tray_start"), self.on_start)
+        self.stop_item = item(t("tui.tray_stop"), self.on_stop)
+        menu.append(Gtk.SeparatorMenuItem())
+        item(t("tui.tray_quit"), self.on_quit)
+
+        menu.show_all()
+        self.menu = menu
+        self.indicator.set_menu(menu)
+
+    # --- опрос демона ----------------------------------------------------------
+
+    def _tick(self):
+        status = core.request_sync("status")
+        running = bool(status and status.get("running"))
+        self.start_item.set_sensitive(not running)
+        self.stop_item.set_sensitive(running)
+        if status:
+            self.indicator.set_label(
+                f" {status.get('color', '')}" if running else "", ""
+            )
+        else:
+            self.indicator.set_label(f" {t('tui.tray_no_daemon')}", "")
+        return True
+
+    # --- действия ---------------------------------------------------------------
+
+    def on_show(self, *_):
+        try:
+            subprocess.Popen(
+                [TUI, "--window"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+            vlog.log_info(TOOL, "spawn window")
+        except OSError as e:
+            vlog.log_error(TOOL, f"spawn window failed: {e}", exc=False)
+
+    def on_start(self, *_):
+        state = core.load_state()
+        colors = core.colors_for_state(state)
+        delay = core.delay_for_speed(state.get("speed", 1.0))
+        reply = core.request_sync(
+            "effect_start", colors=colors, delay=delay, effect=state.get("effect")
+        )
+        if reply is None:
+            core.spawn_daemon()
+            reply = core.request_sync(
+                "effect_start", colors=colors, delay=delay, effect=state.get("effect")
+            )
+        vlog.log_info(TOOL, f"effect start -> {reply}")
+        self._tick()
+
+    def on_stop(self, *_):
+        reply = core.request_sync("effect_stop")
+        vlog.log_info(TOOL, f"effect stop -> {reply}")
+        self._tick()
+
+    def on_quit(self, *_):
+        core.request_sync("quit")
+        vlog.log_info(TOOL, "quit by menu")
+        self.Gtk.main_quit()
+
+
+def main():
+    if "--quit" in sys.argv:
+        reply = core.request_sync("quit")
+        print(reply or {"ok": False, "msg": "демон не запущен"})
+        return 0
+
+    try:
+        AppIndicator3, GLib, Gtk = _require_gi()
+    except (ImportError, ValueError) as e:
+        vlog.log_error(TOOL, f"gi unavailable: {e}", exc=False)
+        print(t("tui.tray_no_gi", err=e), file=sys.stderr)
+        return 1
+
+    if not Gtk.init(None):
+        vlog.log_error(TOOL, "no display for Gtk", exc=False)
+        print(t("tui.tray_no_display"), file=sys.stderr)
+        return 1
+
+    if not core.request_sync("ping"):
+        core.spawn_daemon()
+
+    vlog.log_info(TOOL, f"start pid={os.getpid()}")
+    Tray(AppIndicator3, GLib, Gtk)
+    Gtk.main()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

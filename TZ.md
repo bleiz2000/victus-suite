@@ -615,3 +615,53 @@ echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/energy_performa
 sensors
 nvidia-smi
 ```
+
+---
+
+## 14. Версия 1.0.0-beta: зафиксированная архитектура и переход к приложению
+
+> Редакция 2026-09-29. Источник версии — файл `VERSION`.
+> Следующий этап упаковки/дистрибуции — `ROADMAP.md` (R1…R5).
+
+### 14.1. Что зафиксировано в 1.0.0-beta
+
+| Блок | Файл | Суть |
+|---|---|---|
+| Ядро (EC, права, движок) | `bin/tui/core.py` | `probe_access()` → вердикт `direct`/`sudo`/`none`; `needs_sudo`, `_with_priv`, `ec_module_ok`, `access_hint` (подсказка про modprobe только если модуля реально нет); `delay_for_speed(speed) = 0.25/speed` (clamp 0.05…2.0) — **направление совпадает с фазой синуса**; `Engine`/`local_apply`/`local_effect_start` |
+| Вкладка подсветки | `bin/tui/kbd_tab.py` | пресеты, пикер, эффекты, `kill_loop()` (останавливает цикл через CLI/демон), `set_calm()` (покой/бой), `_rebuilding` + `restore_running()` (пересборка виджета при смене языка не гасит эффект) |
+| Экран и кнопка языка | `bin/tui/screens.py` | макет Bento 960×540 (`#shell` → три панели), `#titlerow` + `#lang`, `toggle_language()` (пишет `config/locale`, пересоздаёт дерево) |
+| ASCII-слайдеры и волна | `bin/tui/slider.py` | слайдеры (клик/колесо, без выделения текста); `SineWave`: лерп `_amp_k`/`_period_div` от скорости (0.06/0.05 за тик 0.12 c), `energy` 0→1, **спокойный режим** (амплитуда `max(base*amp_k*(0.10+0.90e), 0.55)`, ось в цвет), **плавное переливание** (`_step_target` + доездка ≤0.04/тик по кратчайшей дуге) |
+| Запись в EC | `bin/victus-kbd` | `ec_ready()`, гейт «euid!=0 → работаем, если ec_ready() или cmd==stop»; `cycle --delay ≥ 0.05` |
+| Фон | `bin/victusd` | unix-сокет `$XDG_RUNTIME_DIR/victus-suite-<uid>.sock`, счётчик `k` идёт с той же периодичностью, что цикл клавиатуры; `--verbose`, `--quit`; автостарт из `victus_tui` |
+| Трей | `bin/victus-tray` | AyatanaAppIndicator3: открыть окно / старт-стоп / выход; `victus_tui --tray` |
+| Точка входа | `bin/victus_tui` | без флагов — в терминале; `--window` — float 960×540 (foot, запасной kitty); `--tray` — только демон+трей |
+
+**Жёсткого автозапуска нет.** `victusd` поднимается, когда нужен, и умирает
+по `--quit`/закрытию последнего клиента; автозапуск при входе в систему —
+это R3 в `ROADMAP.md` (systemd --user), а не текущее поведение.
+
+### 14.2. Ключевые договорённости (не ломать)
+
+1. **TUI = тонкая обёртка над CLI.** Любая запись в EC идёт через
+   `victus-kbd` (или `core._with_priv`), никакой параллельной логики записи.
+2. **Права проверяются по факту** (`probe_access`), а не «всегда sudo».
+   Если изменился гейт в `victus-kbd` — синхронно править `core.probe_access`.
+3. **Скорость одна на всё:** `delay_for_speed` управляет и циклом клавиатуры,
+   и локальным `auto_flow`. Менять направление только вместе с тестами
+   `daemon_smoke` / `daemon_tui_smoke`.
+4. **`kill_loop()` перед каждым новым действием**, который не должен конфликтовать
+   с бегущим циклом; `set_calm(True)` — только когда эффект точно остановлен.
+5. **Состояние** — `state/last_state.json` (единственный источник правды,
+   демон и TUI читают его одинаково). Язык — `config/locale` / `VICTUS_LANG`.
+6. **Тесты последовательные:** сьюты делят сокет и `last_state.json`,
+   параллельный запуск даёт ложные падения. Перед прогоном — `killer.py`
+   (`/tmp/opencode/v2/`), после — сброс `state/last_state.json` в дефолт.
+
+### 14.3. Порядок входа нового агента
+
+1. `START_DEVELOPMENT.md` (правила §0, состояние §2, roadmap §4).
+2. `PROGRESS_LOG.md` → «ТЕКУЩИЙ СТАТУС» + верхняя запись.
+3. `ROADMAP.md` — что делать в этом этапе (R1…R5).
+4. Только потом код: `bin/tui/core.py` → `kbd_tab.py` → `slider.py` → `screens.py`.
+5. Проверка после любой правки: 6 смоук-сьютов (`/tmp/opencode/v2/`),
+   итог — 186 проверок. Фон чист, `state/last_state.json` — дефолтный.

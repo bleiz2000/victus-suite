@@ -28,9 +28,21 @@ DRY = os.environ.get("VICTUS_DRY_RUN") == "1"
 _dry_state = [255, 255, 255]
 
 
+def ec_ready():
+    """EC-узел существует и в него можно писать текущим юзером."""
+    return os.path.exists(EC_PATH) and os.access(EC_PATH, os.W_OK)
+
+
 def ensure_ec():
     if DRY:
         return
+    if ec_ready():
+        return
+    if os.geteuid() != 0:
+        # не root и EC не доступен — дальше всё равно упадёт, скажем сразу
+        if not os.path.exists(EC_PATH):
+            die(t("kbd.ec_unavailable"))
+        die(t("kbd.ec_not_writable", path=EC_PATH))
     if not os.path.exists("/sys/kernel/debug"):
         vlog.log_info(TOOL, "mounting debugfs")
         subprocess.run(
@@ -145,7 +157,7 @@ def cmd_cycle(args):
 
     if not colors:
         die(t("kbd.cycle_need_color"))
-    if delay < 0.1:
+    if delay < 0.05:
         die(t("kbd.cycle_delay_min"))
     rgb_list = [parse_color(c) for c in colors]
 
@@ -193,7 +205,9 @@ def main():
     args = sys.argv[1:]
     vlog.log_info(TOOL, f"invoke euid={os.geteuid()} argv={args!r}")
 
-    if os.geteuid() != 0 and not DRY:
+    cmd = args[0].lower() if args else ""
+    # stop не трогает EC (только pid-файл) — работает и без root
+    if os.geteuid() != 0 and not DRY and not ec_ready() and cmd != "stop":
         die(t("common.run_with_sudo", tool=TOOL))
 
     if not args:

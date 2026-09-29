@@ -1,6 +1,6 @@
 # OMEN Gaming Hub for Linux
 
-**Version:** v1.1-alpha · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
+**Version:** v1.0.0-beta · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
 
 An OMEN Gaming Hub analogue for Linux: HP Victus/OMEN keyboard backlight,
 power modes, fans, monitoring and overlay (Shift+F2 replacement).
@@ -13,6 +13,46 @@ Local project folder: `~/Work/victus-suite` → GitHub `victus-suite`.
 **Strategy — simple first:** stage 1 (basic CLI: light, fans, temperatures),
 stage 2 (TUI on Textual), stage 3 (effects and power profiles).
 Details — `START_DEVELOPMENT.md` §4.
+
+## Installation (v1.0.0-beta)
+
+**From a release (recommended):**
+
+```bash
+# dependencies (Arch/Omarchy)
+sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
+python -m pip install --user textual      # TUI engine (8.x)
+
+mkdir -p ~/Work && cd ~/Work
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/latest/download/victus-suite.tar.gz
+tar xzf vs.tar.gz && cd victus-suite
+./install.sh                              # symlinks into ~/.local/bin
+```
+
+**From source:**
+
+```bash
+git clone https://github.com/bleiz2000/victus-suite.git ~/Work/victus-suite
+cd ~/Work/victus-suite && ./install.sh
+```
+
+**Optional — passwordless EC writes** (otherwise every write asks for sudo):
+
+```bash
+echo "$USER ALL=(root) NOPASSWD: $PWD/bin/victus-kbd" | sudo tee /etc/sudoers.d/victus-suite
+sudo chmod 440 /etc/sudoers.d/victus-suite
+```
+
+**Run:**
+
+```bash
+victus_tui --window    # floating 960×540 window (foot)
+victus_tui             # in the current terminal
+victus_tui --tray      # background daemon + tray icon only
+victus-tray            # tray icon: open window / start-stop effect / quit
+```
+
+Remove with `./install.sh --remove`.
 
 ## What works right now
 
@@ -27,7 +67,9 @@ Details — `START_DEVELOPMENT.md` §4.
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
 | `Changer cycle <colors> [--delay S]` | custom loop | asks sudo |
 | `Changer stop` | stop the loop | asks sudo |
-| `victus_tui` | **TUI (alpha)** — backlight tab: presets, HSV, effects | asks sudo |
+| `victus_tui [--window\|--tray]` | **TUI (v1.0-beta)** — Bento 960×540: presets, HSV, effects | asks sudo |
+| `victusd [--verbose\|--quit]` | background daemon (unix socket, keeps effects alive) | no |
+| `victus-tray` | tray icon: open window / start-stop effect / quit | no |
 | `victus-report [--with-ec]` | diagnostics + logs into one file | no |
 
 Code: `bin/` (symlinks into `~/.local/bin` are created by `./install.sh`)
@@ -49,13 +91,15 @@ Changer 120 200 255          # arbitrary RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # your own name (english)
 Changer mycolor
-victus_tui                   # TUI (alpha, v1.1)
+victus_tui                   # TUI (beta, v1.0.0-beta)
 ```
 
-### TUI (v1.1-alpha)
+### TUI (v1.0.0-beta)
 
 ```bash
 victus_tui                   # launch (asks sudo on EC writes)
+victus_tui --window          # floating 960×540 window (foot, kitty fallback)
+victus_tui --tray            # daemon + tray icon, no window
 VICTUS_DRY_RUN=1 victus_tui  # launch without EC writes (safe preview)
 ```
 
@@ -63,15 +107,25 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 `victus-kbd`, the palette comes from `victus_palette`, state is kept in
 `state/last_state.json`.
 
+- compact **Bento 960×540** layout: PRESETS / COLOR PICKER / LIGHTING EFFECTS;
 - power switch, 48 built-in presets + your own colors;
 - HSV sliders with live preview: `rgb() / #hex / hsv()`;
 - `Apply` · `Copy hex` · `Save as name`;
-- `Cycle` effect with speed, `Start` / `Stop`, status line.
+- `Cycle`/`Fade`/`Solid` effects, `Start` / `Stop`, status line;
+- **wave speed follows Effect Speed**: amplitude and period are lerped toward
+  the target every 0.12 s, no jumps;
+- **calm mode**: after `Stop` the sine flattens into a straight coloured line
+  with a barely visible live wobble — the light never dims;
+- **smart permission probe** (`probe_access`): direct write / `sudo` / EC module
+  missing — the hint matches what is actually broken;
+- **language button** in the title row: RU ↔ EN without restart.
 
-**Known alpha issues (planned for v1.2):** sliders select text instead of
-dragging with the mouse, and the design looks rough. Next stage:
-**Material Design & Animation Overhaul** (Material Design 3, rounded frames,
-working mouse/drag sliders, smooth indicators).
+The window lives in the background: `victusd` (unix socket
+`$XDG_RUNTIME_DIR/victus-suite-<uid>.sock`) keeps the effect running while the
+TUI is closed, `victus-tray` gives quick start/stop from the tray.
+
+**Fixed since alpha:** mouse-draggable ASCII sliders (no text selection).
+Remaining for v1.1+ — see `ROADMAP.md`.
 
 ## Interface language (localization)
 
@@ -114,13 +168,20 @@ victus-suite/
 ├── README.md                     ← this file (quick start), EN + RU
 ├── START_DEVELOPMENT.md          ← ENTRY POINT: state, roadmap, agent rules
 ├── PROGRESS_LOG.md               ← context journal (status, time, next step)
+├── ROADMAP.md                    ← next stage: script → installable app
 ├── TZ.md                         ← full technical specification
+├── VERSION                       ← 1.0.0-beta (single source of truth)
 ├── install.sh                    ← ./install.sh [--remove] → symlinks to ~/.local/bin
 ├── LICENSE                       ← MIT
 ├── bin/                          ← all commands (put new ones here)
-│   victus-kbd  ColorMaker  Changer  victus-report  victus_tui
+│   victus-kbd  Changer  ColorMaker  victus-report
+│   victus_tui  victusd  victus-tray
 │   victus_log.py (logging)   i18n.py (translations)   victus_palette.py
-│   tui/                          ← TUI modules: screens, kbd_tab, slider
+│   tui/                          ← TUI modules
+│     core.py (EC/sudo probe, engine, delay_for_speed)
+│     screens.py (Bento layout, language button)
+│     kbd_tab.py (presets/picker/effects, kill_loop, calm)
+│     slider.py (ASCII sliders, SineWave)
 ├── locales/                      ← ru.json, en.json (interface texts)
 ├── config/                       ← colors.conf, locale, profiles.d/, curves.d/
 ├── logs/                         ← victus.log (+ rotation .1..5)   [not in git]
@@ -146,7 +207,7 @@ Reinstall after moving/cloning: `./install.sh`.
 
 # OMEN Gaming Hub для Linux
 
-**Версия:** v1.1-alpha · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
+**Версия:** v1.0.0-beta · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
 
 Аналог OMEN Gaming Hub для Linux: подсветка клавиатуры HP Victus/OMEN,
 режимы питания, вентиляторы, мониторинг и оверлей (замена Shift+F2).
@@ -159,6 +220,46 @@ Reinstall after moving/cloning: `./install.sh`.
 **Стратегия — сначала простое:** этап 1 (базовый CLI: свет, фены, температуры),
 этап 2 (TUI на Textual), этап 3 (эффекты и профили питания).
 Подробности — `START_DEVELOPMENT.md` §4.
+
+## Установка (v1.0.0-beta)
+
+**Из релиза (рекомендуется):**
+
+```bash
+# зависимости (Arch/Omarchy)
+sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
+python -m pip install --user textual      # движок TUI (8.x)
+
+mkdir -p ~/Work && cd ~/Work
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/latest/download/victus-suite.tar.gz
+tar xzf vs.tar.gz && cd victus-suite
+./install.sh                              # симлинки в ~/.local/bin
+```
+
+**Из исходников:**
+
+```bash
+git clone https://github.com/bleiz2000/victus-suite.git ~/Work/victus-suite
+cd ~/Work/victus-suite && ./install.sh
+```
+
+**Опционально — запись в EC без пароля** (иначе каждый запрос — ввод sudo):
+
+```bash
+echo "$USER ALL=(root) NOPASSWD: $PWD/bin/victus-kbd" | sudo tee /etc/sudoers.d/victus-suite
+sudo chmod 440 /etc/sudoers.d/victus-suite
+```
+
+**Запуск:**
+
+```bash
+victus_tui --window    # всплывающее окно 960×540 (foot)
+victus_tui             # в текущем терминале
+victus_tui --tray      # только фоновый демон + иконка в трее
+victus-tray            # трей: открыть окно / старт-стоп эффекта / выход
+```
+
+Удаление: `./install.sh --remove`.
 
 ## Что уже работает сейчас
 
@@ -173,7 +274,9 @@ Reinstall after moving/cloning: `./install.sh`.
 | `Changer cycle-red` | **Цикл ярко-красных** (red/fire/scarlet/darkred) | спросит sudo |
 | `Changer cycle <цвета> [--delay S]` | Свой цикл | спросит sudo |
 | `Changer stop` | Остановить цикл | спросит sudo |
-| `victus_tui` | **TUI (альфа)** — вкладка «Подсветка»: пресеты, HSV, эффекты | спросит sudo |
+| `victus_tui [--window\|--tray]` | **TUI (v1.0-beta)** — Bento 960×540: пресеты, HSV, эффекты | спросит sudo |
+| `victusd [--verbose\|--quit]` | фоновый демон (unix-сокет, держит эффекты живыми) | нет |
+| `victus-tray` | иконка в трее: открыть окно / старт-стоп / выход | нет |
 | `victus-report [--with-ec]` | Диагностика + логи в один файл | нет |
 
 Код: `bin/` (симлинки в `~/.local/bin` ставит `./install.sh`)
@@ -195,13 +298,15 @@ Changer 120 200 255          # произвольный RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # своё имя (english)
 Changer mycolor
-victus_tui                   # TUI (альфа, v1.1)
+victus_tui                   # TUI (бета, v1.0.0-beta)
 ```
 
-### TUI (v1.1-alpha)
+### TUI (v1.0.0-beta)
 
 ```bash
 victus_tui                   # запуск (при записи в EC спросит sudo)
+victus_tui --window          # всплывающее окно 960×540 (foot, запасной kitty)
+victus_tui --tray            # только демон + иконка в трее
 VICTUS_DRY_RUN=1 victus_tui  # запуск без записи в EC (безопасный предпросмотр)
 ```
 
@@ -209,15 +314,25 @@ TUI — **тонкая обёртка над CLI**: каждая запись в
 палитра берётся из `victus_palette`, состояние хранится в
 `state/last_state.json`.
 
+- компактный макет **Bento 960×540**: ПРЕСЕТЫ / ВЫБОР ЦВЕТА / ЭФФЕКТЫ;
 - переключатель питания, 48 встроенных пресетов + свои цвета;
 - слайдеры HSV с живым предпросмотром: `rgb() / #hex / hsv()`;
 - `Применить` · `Копировать hex` · `Сохранить как имя`;
-- эффект `Cycle` со скоростью, `Старт` / `Стоп`, строка статуса.
+- эффекты `Цикл`/`Затухание`/`Статичный`, `Старт` / `Стоп`, строка статуса;
+- **скорость волны идёт от «Скорости эффекта»**: амплитуда и период
+  доезжают к цели лерпом за 0.12 с, без рывков;
+- **спокойный режим**: после `Стоп` синус выравнивается в ровную цветную
+  линию с еле заметным живым колыханием — свет не гаснет;
+- **умная проверка прав** (`probe_access`): прямая запись / `sudo` / модуль
+  EC не загружен — подсказка про то, что реально сломано;
+- **кнопка языка** в заголовке: RU ↔ EN без перезапуска.
 
-**Известные косяки альфы (запланировано на v1.2):** слайдеры выделяют текст
-вместо перетаскивания мышью, дизайн выглядит топорно. Следующий этап:
-**Material Design & Animation Overhaul** (Material Design 3, скруглённые
-рамки, работающие слайдеры с мышью/драгом, плавные индикаторы).
+Окно живёт в фоне: `victusd` (unix-сокет `$XDG_RUNTIME_DIR/victus-suite-<uid>.sock`)
+держит эффект работающим, когда TUI закрыт, а `victus-tray` даёт быстрый
+старт-стоп из трея.
+
+**Исправлено с альфы:** слайдеры тянутся мышью (текст больше не выделяется).
+Остальное на следующий этап — см. `ROADMAP.md`.
 
 ## Язык интерфейса (локализация)
 
@@ -259,13 +374,20 @@ victus-suite/
 ├── README.md                     ← этот файл (быстрый старт), EN + RU
 ├── START_DEVELOPMENT.md          ← ТОЧКА ВХОДА: состояние, roadmap, правила агента
 ├── PROGRESS_LOG.md               ← журнал контекста (статус, время, следующий шаг)
+├── ROADMAP.md                    ← следующий этап: скрипт → устанавливаемое приложение
 ├── TZ.md                         ← полное техническое задание
+├── VERSION                       ← 1.0.0-beta (источник правды по версии)
 ├── install.sh                    ← ./install.sh [--remove] → симлинки в ~/.local/bin
 ├── LICENSE                       ← MIT
 ├── bin/                          ← все команды (сюда класть новые)
-│   victus-kbd  ColorMaker  Changer  victus-report  victus_tui
+│   victus-kbd  Changer  ColorMaker  victus-report
+│   victus_tui  victusd  victus-tray
 │   victus_log.py (логирование)   i18n.py (перевод)   victus_palette.py
-│   tui/                          ← модули TUI: screens, kbd_tab, slider
+│   tui/                          ← модули TUI
+│     core.py (EC/проверка прав, движок, delay_for_speed)
+│     screens.py (макет Bento, кнопка языка)
+│     kbd_tab.py (пресеты/пикер/эффекты, kill_loop, calm)
+│     slider.py (ASCII-слайдеры, SineWave)
 ├── locales/                      ← ru.json, en.json (тексты интерфейса)
 ├── config/                       ← colors.conf, locale, profiles.d/, curves.d/
 ├── logs/                         ← victus.log (+ ротация .1..5)   [не в git]

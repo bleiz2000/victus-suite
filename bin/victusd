@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""victusd — фоновый демон victus-suite.
+
+Держит состояние подсветки и крутит эффекты, пока TUI свёрнут/закрыт:
+  * unix-сокет  $XDG_RUNTIME_DIR/victus-suite-<uid>.sock  (JSON-строка на запрос);
+  * запись      — один процесс `victus-kbd cycle`, который сам крутит петлю;
+  * синхронизация — счётчик k (индекс текущего сэмпла) идёт с той же
+    периодичностью, что и цикл клавиатуры: TUI спрашивает status и рисует
+    ровно то, что ушло в EC;
+  * состояние   — state/last_state.json, восстанавливается при старте.
+
+Запуск:  victusd            (автоспавн из victus_tui)
+         victusd --verbose  # в stdout + logs/victus.log
+"""
+
+import argparse
+import asyncio
+import datetime
+import json
+import os
+import signal
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+
+import victus_log as vlog  # noqa: E402
+from tui import core  # noqa: E402
+
+TOOL = "victusd"
+VERSION = "1.0"
+
+
+def now_stamp() -> str:
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+class Daemon:
+    def __init__(self, verbose: bool = False):
+        self.state = core.load_state()
+        self.verbose = verbose
+        self.colors = []          # hex-петля, которую крутит victus-kbd
+        self.delay = core.delay_for_speed(self.state["speed"])
+        self.k = 0                # индекс текущего сэмпла
+        self.running = False
+        self._ticker = None
+        self._server = None
+        self._stop = None
+        self._owner = False
+
+    # --- запись на клавиатуру -------------------------------------------------
+
+    def _persist(self):
+        self.state["running"] = self.running
+        self.state["cycle_colors"] = list(self.colors)
+        self.state["cycle_delay"] = self.delay
+        self.state["updated"] = now_stamp()
+        core.save_state(self.state)
+
+    async def apply_color(self, rgb) -> tuple:
+        # ручной цвет должен остаться: цикл сначала гасим
+        if self.running:
+            await self.stop_cycle(silent=True)
+            vlog.log_info(TOOL, "manual color — cycle stopped")
+        picked = core._norm_rgb(rgb, self.state["rgb"])
+        self.state["rgb"] = picked
+        self.state["hex"] = core.to_hex(picked)
+        write = self.effective_rgb(picked)
+        ok, msg = await core.local_apply(write)
+        if ok:
+            self._persist()
+        return ok, msg
+
+    def effective_rgb(self, rgb=None) -> tuple:
+        """Что реально уйдёт в EC: power-off = чёрный, иначе глубина чёрного."""
+        picked = core._norm_rgb(
+            rgb if rgb is not None else self.state["rgb"], self.state["rgb"]
+        )
+        if not self.state.get("power", True):
+            return (0, 0, 0)
+        return core.apply_black_depth(picked, self.state.get("black_depth", 50))
+
+    async def start_cycle(self, colors, delay: float) -> tuple:
+        await self.stop_cycle(silent=True)
+        self.colors = [h for h in (core.as_hex(c) for c in colors) if h][: core.SAMPLES * 2]
+        self.delay = float(delay)
+        if not self.colors:
+            return False, "no colors"
+        ok, msg = await core.local_effect_start(self.colors, self.delay)
+        if not ok:
+            return False, msg or "cycle failed"
+        self.running = True
+        self.k = 0
+        self._ticker = asyncio.get_event_loop().call_later(
+            self.delay, self._tick
+        )
+        self._persist()
+        vlog.log_info(TOOL, f"cycle on colors={len(self.colors)} delay={self.delay}")
+        return True, msg
+
+    async def stop_cycle(self, silent: bool = False) -> tuple:
+        if self._ticker is not None:
+            self._ticker.cancel()
+            self._ticker = None
+        if self.running:
+            await core.local_effect_stop()
+        self.running = False
+        if not silent:
+            self._persist()
+            vlog.log_info(TOOL, "cycle off")
+        return True, ""
+
+    def _tick(self):
+        self._ticker = None
+        if not self.running or not self.colors:
+            return
+        self.k = (self.k + 1) % len(self.colors)
+        self._ticker = asyncio.get_event_loop().call_later(self.delay, self._tick)
+
+    def current_color(self) -> str:
+        if self.running and self.colors:
+            return self.colors[self.k % len(self.colors)]
+        return core.to_hex(self.effective_rgb())
+
+    # --- ipc -------------------------------------------------------------------
+
+    async def handle(self, msg: dict) -> dict:
+        cmd = msg.get("cmd")
+        if cmd == "ping":
+            return {"ok": True, "version": VERSION, "pid": os.getpid(), "state": self.state}
+        if cmd == "status":
+            return {
+                "ok": True,
+                "pid": os.getpid(),
+                "running": self.running,
+                "effect": self.state.get("effect", "none"),
+                "k": self.k,
+                "steps": len(self.colors),
+                "delay": self.delay,
+                "color": self.current_color(),
+                "power": self.state.get("power", True),
+            }
+        if cmd == "set":
+            new = msg.get("state")
+            if isinstance(new, dict):
+                merged = dict(self.state)
+                for key in core.DEFAULTS:
+                    if key in new:
+                        merged[key] = new[key]
+                merged["rgb"] = core._norm_rgb(merged.get("rgb"), self.state["rgb"])
+                merged["stops"] = core.norm_stops(merged.get("stops"))
+                merged["black_depth"] = core._clamp(
+                    int(core._num(merged.get("black_depth"), 50)), 0, 100
+                )
+                merged["speed"] = core._clamp(
+                    float(core._num(merged.get("speed"), 1.0)), 0.2, 5.0
+                )
+                merged["power"] = bool(merged.get("power", True))
+                if merged.get("effect") not in ("none", "cycle", "fade"):
+                    merged["effect"] = "none"
+                self.state = merged
+                self._persist()
+                want = core.colors_for_state(self.state)
+                delay = core.delay_for_speed(self.state["speed"])
+                if self.running and (want != self.colors or delay != self.delay):
+                    ok, m = await self.start_cycle(want, delay)
+                    vlog.log_info(TOOL, f"cycle reloaded ok={ok} {m}")
+            return {"ok": True, "state": self.state}
+        if cmd == "apply":
+            rgb = core._norm_rgb(msg.get("rgb"), self.state["rgb"])
+            ok, m = await self.apply_color(rgb)
+            return {"ok": ok, "msg": m}
+        if cmd == "effect_start":
+            colors = [core._norm_hex(c) for c in msg.get("colors", [])]
+            colors = [c for c in colors if c]
+            delay = float(msg.get("delay") or self.delay)
+            ok, m = await self.start_cycle(colors, delay)
+            self.state["effect"] = msg.get("effect") or self.state.get("effect", "cycle")
+            return {"ok": ok, "msg": m}
+        if cmd == "effect_stop":
+            ok, m = await self.stop_cycle()
+            return {"ok": ok, "msg": m}
+        if cmd == "quit":
+            if self._stop is not None:
+                self._stop.set()
+            return {"ok": True, "msg": "bye"}
+        return {"ok": False, "msg": f"unknown cmd {cmd!r}"}
+
+    async def _serve(self, reader, writer):
+        try:
+            raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
+            msg = json.loads(raw.decode() or "{}")
+            reply = await self.handle(msg)
+        except (ValueError, asyncio.TimeoutError) as e:
+            reply = {"ok": False, "msg": str(e)}
+        except Exception as e:  # noqa: BLE001
+            vlog.log_exception(TOOL, f"request failed: {e}")
+            reply = {"ok": False, "msg": str(e)}
+        try:
+            writer.write((json.dumps(reply) + "\n").encode())
+            await writer.drain()
+        except OSError:
+            pass
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+
+    # --- жизненный цикл ---------------------------------------------------------
+
+    async def _restore(self):
+        """Старт всегда статичный: цикл не восстанавливаем — только по Start."""
+        if self.running:
+            self.running = False
+        vlog.log_info(TOOL, "start in static mode (no effect restore)")
+
+    async def run(self):
+        self._stop = asyncio.Event()
+        path = core.sock_path()
+        if os.path.exists(path):
+            if await core.Engine().ping():
+                vlog.log_info(TOOL, "already running — выхожу")
+                return
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._server = await asyncio.start_unix_server(self._serve, path=path)
+        os.chmod(path, 0o600)
+        self._owner = True
+        vlog.log_info(TOOL, f"listen {path} pid={os.getpid()}")
+        await self._restore()
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, self._stop.set)
+            except NotImplementedError:
+                pass
+        await self._stop.wait()
+
+    async def shutdown(self):
+        if not self._owner:
+            vlog.log_info(TOOL, "не мой сокет — ничего не трогаю")
+            return
+        vlog.log_info(TOOL, "shutdown")
+        await self.stop_cycle(silent=True)
+        rgb = self.state["rgb"] if self.state.get("power", True) else [0, 0, 0]
+        await self.apply_color(rgb)
+        self._persist()
+        try:
+            if self._server is not None:
+                self._server.close()
+            os.unlink(core.sock_path())
+        except OSError:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description="victus-suite daemon")
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--quit", action="store_true", help="остановить запущенный демон")
+    args = parser.parse_args()
+
+    if args.quit:
+        reply = asyncio.run(core.Engine().request("quit"))
+        print(json.dumps(reply or {"ok": False, "msg": "демон не запущен"}, ensure_ascii=False))
+        return
+
+    async def run():
+        daemon = Daemon(verbose=args.verbose)
+        try:
+            await daemon.run()
+        finally:
+            await daemon.shutdown()
+
+    vlog.log_info(TOOL, f"start pid={os.getpid()} uid={os.getuid()}")
+    asyncio.run(run())
+    vlog.log_info(TOOL, "exit")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
