@@ -201,11 +201,33 @@ def cmd_cycle(args):
             os.remove(pidfile())
 
 
+def cmd_fans(argv: list) -> int:
+    """Подкоманда vertil — запись вентиляторов (fanctl).
+
+    Живёт здесь, чтобы пользоваться уже выданным NOPASSWD-правилом на этот
+    бинарник (README): TUI зовёт `sudo -n victus-kbd fans <cmd>` и не спрашивает
+    пароль. Ни EC, ни root-проверка тут не участвуют — права решает fanctl.
+    """
+    tools = os.path.join(os.path.dirname(_HERE), "vertil", "tools")
+    if not os.path.isdir(tools):
+        print(t("kbd.fans_missing", path=tools), file=sys.stderr)
+        return 2
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import fanctl  # noqa: PLC0415 — только для этой подкоманды
+    return int(fanctl.main(argv))
+
+
 def main():
     args = sys.argv[1:]
     vlog.log_info(TOOL, f"invoke euid={os.geteuid()} argv={args!r}")
 
     cmd = args[0].lower() if args else ""
+
+    # vertil: раньше проверки EC — тут не нужен ни EC, ни root
+    if cmd == "fans":
+        sys.exit(cmd_fans(args[1:]))
+
     # stop не трогает EC (только pid-файл) — работает и без root
     if os.geteuid() != 0 and not DRY and not ec_ready() and cmd != "stop":
         die(t("common.run_with_sudo", tool=TOOL))

@@ -1,8 +1,9 @@
 """Root screen and App of victus_tui — компактный Bento v2.
 
 Компактная сетка под окно ~1/4 экрана 1080p (~110×31 ячеек):
-shell (title) → body [PRESETS | COLOR PICKER | LIGHTING EFFECTS] → status line.
-Только «Подсветка» — вкладки вентиляторов/питания на следующих этапах.
+shell (title + вкладки) → body [Подсветка | vertil] → status line.
+Вкладки переключаются без размонтирования (display), поэтому эффект
+подсветки и автопилот вентиляторов переживают переключение.
 """
 
 from textual.app import App, ComposeResult
@@ -11,21 +12,34 @@ from textual.widgets import Button
 
 from i18n import CONFIG_LOCALE, lang, t
 from tui.kbd_tab import KbdTab
+from tui.vertil_tab import VertilTab
+
+TABS = (("tab-kbd", "kbd"), ("tab-vertil", "vertil"))
 
 
 class VictusScreen(Container):
     def compose(self) -> ComposeResult:
+        app = self.app
+        active = getattr(app, "active_tab", "kbd")
         shell = Vertical(id="shell")
         shell.border_title = t("tui.app_title")
         with shell:
             with Horizontal(id="titlerow"):
+                yield Button(t("tui.tab_kbd"), id="tab-kbd", classes="tab")
+                yield Button(t("tui.tab_vertil"), id="tab-vertil", classes="tab")
                 yield Button(t("tui.btn_lang"), id="lang")
-            yield KbdTab(id="kbd")
+            kbd = KbdTab(id="kbd")
+            vertil = VertilTab(id="vertil")
+            kbd.display = active != "vertil"
+            vertil.display = active == "vertil"
+            yield kbd
+            yield vertil
 
 
 class VictusApp(App):
     TITLE = "victus-suite"
     CSS_PATH = None
+    active_tab = "kbd"
     CSS = """
     Screen {
         background: #0b0b0b;
@@ -39,7 +53,7 @@ class VictusApp(App):
         border-title-style: bold;
         background: #0b0b0b;
     }
-    #shell #kbd {
+    #shell #kbd, #shell #vertil {
         width: 100%;
         height: 1fr;
     }
@@ -49,6 +63,27 @@ class VictusApp(App):
         align: left middle;
         margin: 0;
         padding: 0;
+    }
+    #titlerow .tab {
+        width: auto;
+        min-width: 0;
+        height: 1;
+        padding: 0 1;
+        margin: 0;
+        border: none;
+        background: transparent;
+        color: #7a7a7a;
+        text-align: left;
+        content-align: left middle;
+    }
+    #titlerow .tab:hover {
+        background: #1c1c1c;
+        color: #e8e8e8;
+    }
+    #titlerow .tab.on {
+        background: #141c14;
+        color: #7ee787;
+        text-style: bold;
     }
     #titlerow #lang {
         width: auto;
@@ -62,6 +97,7 @@ class VictusApp(App):
         text-style: bold;
         text-align: left;
         content-align: left middle;
+        dock: right;
     }
     #titlerow #lang:hover {
         background: #14200f;
@@ -84,6 +120,9 @@ class VictusApp(App):
     #presets-panel { width: 22; }
     #color-panel { width: 1fr; }
     #effects-panel { width: 34; }
+    #vtelemetry { width: 46; }
+    #vcontrol { width: 1fr; }
+    #vlimits { width: 32; }
 
     /* ---- PRESETS ---- */
     .add-row {
@@ -358,6 +397,71 @@ class VictusApp(App):
         color: #ffb3b3;
     }
 
+    /* ---- VERTIL ---- */
+    #vbody {
+        width: 100%;
+        height: 1fr;
+    }
+    .vblock {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        text-align: left;
+        color: #b0b0b0;
+    }
+    #v-temps, #v-limits {
+        margin-top: 0;
+    }
+    #v-mode-block {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        padding-top: 1;
+        border-top: solid #3a3a3a;
+    }
+    #v-mode-block Button.mode {
+        width: 100%;
+        min-width: 0;
+        height: 1;
+        padding: 0;
+        margin: 0;
+        border: none;
+        background: transparent;
+        color: #b0b0b0;
+        text-align: left;
+        content-align: left middle;
+    }
+    #v-mode-block Button.mode:hover {
+        background: #1c1c1c;
+        color: #ffffff;
+    }
+    #v-mode-block Button.mode.on {
+        color: #ffffff;
+        text-style: bold;
+    }
+    .vrow {
+        width: 100%;
+        height: 1;
+        margin-top: 1;
+        align: left middle;
+    }
+    .vlabel {
+        width: 10;
+        height: 1;
+        color: #c4c4c4;
+    }
+    .vrow AsciiSlider {
+        width: 1fr;
+        min-width: 6;
+        height: 1;
+    }
+    .vvalue {
+        width: 14;
+        height: 1;
+        text-align: right;
+        color: #9a9a9a;
+    }
+
     /* ---- status ---- */
     #statusline {
         width: 100%;
@@ -376,6 +480,27 @@ class VictusApp(App):
         color: #8a8a8a;
     }
     #status {
+        width: auto;
+        height: 1;
+        color: #7ee787;
+    }
+    #vstatusline {
+        width: 100%;
+        height: 1;
+        align: center middle;
+    }
+    #vstatus-flow {
+        width: 100%;
+        height: 1;
+        align: center middle;
+    }
+    #vstatus-tag {
+        width: auto;
+        height: 1;
+        padding-right: 2;
+        color: #8a8a8a;
+    }
+    #vstatus {
         width: auto;
         height: 1;
         color: #7ee787;
@@ -463,22 +588,43 @@ class VictusApp(App):
         yield VictusScreen()
 
     def action_refresh(self):
+        if self.active_tab == "vertil":
+            # _boot сам показывает статус доступа (нужен пароль / готово)
+            self.query_one("#vertil")._boot()
+            return
         tab = self.query_one("#kbd")
         tab._sync_controls()
         tab._set_status(t("tui.status_ready"))
 
-    async def on_button_pressed(self, event):
-        if event.button.id != "lang":
+    def _show_tab(self, name: str):
+        """Переключение вкладок без размонтирования: display, не remove."""
+        if name not in ("kbd", "vertil"):
             return
-        event.stop()
-        await self.toggle_language()
+        self.active_tab = name
+        for bid, tab_id in TABS:
+            tab = self.query_one("#%s" % tab_id)
+            tab.display = name == tab_id
+            self.query_one("#%s" % bid, Button).set_class(name == tab_id, "on")
+        shown = self.query_one("#%s" % name)
+        first = shown.query("Button").first()
+        if first is not None:
+            first.focus()
+
+    async def on_button_pressed(self, event):
+        bid = event.button.id
+        if bid == "lang":
+            event.stop()
+            await self.toggle_language()
+        elif bid in dict(TABS):
+            event.stop()
+            self._show_tab(dict(TABS)[bid])
 
     async def toggle_language(self):
         """Переключить язык и пересобрать интерфейс.
 
         Подписи считаются один раз при сборке (t() в compose), поэтому
         одного refresh мало — дерево создаётся заново, а состояние
-        (цвет, стопы, скорость) поднимается из state-файла.
+        (цвет, стопы, скорость, вкладка, автопилот) поднимается из state-файла.
         """
         new = "en" if lang().startswith("ru") else "ru"
         try:
@@ -486,14 +632,21 @@ class VictusApp(App):
                 f.write(new + "\n")
         except OSError:
             return
-        tab = self.query_one("#kbd")
-        was_running = bool(tab.running)
+        kbd = self.query_one("#kbd")
+        vertil = self.query_one("#vertil")
+        was_running = bool(kbd.running)
+        was_auto = bool(vertil.autopilot)
         KbdTab._rebuilding = True
+        VertilTab._rebuilding = True
         try:
             screen = self.screen
             await screen.remove_children()
             await screen.mount(VictusScreen())
         finally:
             KbdTab._rebuilding = False
+            VertilTab._rebuilding = False
         if was_running:
             self.query_one("#kbd").restore_running()
+        if was_auto:
+            self.query_one("#vertil").autopilot = True
+        self._show_tab(self.active_tab)

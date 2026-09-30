@@ -12,15 +12,103 @@
 
 | Поле | Значение |
 |---|---|
-| **Фаза** | **v1.0.0-beta — этап закрыт**: Bento-TUI 960×540, спокойный режим, динамическая амплитуда от скорости, умная проверка прав, `victusd` + `victus-tray`, **ярлык «Victus Suite» в меню приложений + ч/б иконка**. Документы обновлены (`README.md` EN / `README.ru.md` RU, `ROADMAP.md`, `TZ.md`, `VERSION`), **коммиты + тег + GitHub Release `v1.0.0-beta`** |
-| **Ветка / коммит** | `main` @ `8a21511 feat(install): ярлык «Victus Suite» …` (запушен) |
-| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релиз `v1.0.0-beta` (prerelease, артефакт `victus-suite.tar.gz` **пересобран 20:36**, 136 262 байта, содержит `share/icons/` и `README.ru.md`) |
-| **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; реальная проверка цикла `--delay 1.25` vs `--delay 0.05` на EC ✅; **`./install.sh` → ярлык `Victus Suite` + иконка, `desktop-file-validate` = VALID** ✅ |
-| **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5) |
-| **Не обёрнуто кодом** | фены (hwmon7), температуры, режимы питания — **НЕ трогаем** |
+| **Фаза** | **v1.1.0-beta — вкладка «Вентиляторы» (`vertil`)**: телеметрия без root (CPU/GPU/VRM, RPM, PWM, режим hwmon), режимы Manual / SMART (автопилот) / BIOS Auto, два слайдера PWM 0..255 с задержкой записи 0.4 с, пороги и hold из `vertil/config/presets.json`, запись **без пароля** через `sudo -n victus-kbd fans …`. Ранее закрытый этап `v1.0.0-beta` (Bento-TUI, спокойный режим, трей, ярлык меню) остаётся в силе |
+| **Ветка / коммит** | `main` @ коммит этой записи `feat(vertil): …` (запушен, тег `v1.1.0-beta` на нём) |
+| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: `v1.1.0-beta` (prerelease, артефакт `victus-suite.tar.gz` из `git archive --prefix=victus-suite/`) и предыдущий `v1.0.0-beta` |
+| **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; проверка цикла `--delay` на EC ✅; **`./install.sh` → ярлык «Victus Suite» + иконка, `desktop-file-validate` = VALID** ✅; **вкладка vertil живьём**: `sudo -n victus-kbd fans status/set-pwm/set-mode` → rc=0, автопилот реально управляет лопастями ✅ |
+| **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5); смоук вкладки `/tmp/opencode/vertil_smoke.py` — **SMOKE OK** (переключение вкладок, смена языка без потери автопилота, restore `config/locale`→`ru`) |
+| **Не обёрнуто кодом** | температуры (отдельной команды `monitor` нет — в TUI читаются через fanlib), режимы питания/профили, вкладка TUI «Питание». **Вентиляторы обёрнуты** |
 | **Следующий этап** | `ROADMAP.md`: R2 (остатки: проверка зависимостей, sudoers-генерация, `make install`) → R3 systemd --user + трей → R4 релизы/AUR → R5 тесты в CI |
-| **Известные косяки** | 18 неиспользуемых ключей `tui.*` в локалях; навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
-| **Последнее изменение** | 2026-09-29 20:41 +04 |
+| **Известные косяки** | hp-wmi не отдаёт setpoint: `pwm*` на чтение ≈0.95× от записанного → статус показывает последнюю команду (by design, report §7); 18 неиспользуемых ключей `tui.*` в локалях; навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
+| **Последнее изменение** | 2026-09-30 21:47 +04 |
+
+---
+
+## Запись от 2026-09-30 21:47 (+04) — вкладка «Вентиляторы» (vertil) + релиз v1.1.0-beta
+
+### Что сделано
+
+1. **Новая вкладка TUI «Вентиляторы»** (`bin/tui/vertil_tab.py`,
+   `bin/tui/vertil_core.py`): три панели — ТЕЛЕМЕТРИЯ (CPU/GPU/VRM*, обороты
+   правого и левого, duty PWM, режим hwmon), УПРАВЛЕНИЕ (кнопки
+   `[ ] Manual / [ ] SMART / [ ] BIOS Auto` + слайдеры `Right fan`/`Left fan`
+   0..255 с оценкой RPM), БЕЗОПАСНОСТЬ (guard/smart/emergency/hold/preset/
+   вердикт доступа) + статус-строка с чипом (`SMART ▸ 128/140`, `PWM 57/57`,
+   авария `!! 93/83 °C`). Опрос 1 с, всё блокирующее — в worker-потоках
+   (`nvidia-smi` до ~3 с), `snapshot` → `_paint`.
+2. **Backend `vertil/` — самодостаточный каталог** (в систему ничего не
+   ставится): `config/presets.json` (устройство, пороги guard 99/88 °C,
+   smart 60..255 PWM, emergency 93/83 °C, hold 180, auto-transition 215 с,
+   происхождение данных), `tools/fanlib.py` (датчики + `Smart`), `tools/fanctl.py`
+   (`status | set-pwm A B | set-mode 0|1|2 | hold N`, один вызов — один
+   процесс, коды 0/1/2), `tools/lab/` (трёхфазный стенд), `docs/`
+   (отчёты по железу и логи тестов).
+3. **Запись без пароля.** Новая подкоманда `bin/victus-kbd fans <cmd>`
+   делегирует в `fanctl.py` (диспетчеризация до проверки EC/root).
+   `vertil_core._wrapper()` строит `sudo -n …/bin/victus-kbd fans …` — идёт по
+   уже выданному NOPASSWD-правилу README, пароль не спрашивается; фоллбэк
+   `sudo -n python fanctl.py`. `probe_access()` проверяет не `sudo true`, а
+   реальную запись (`… victus-kbd fans status`) → вердикт
+   `passwordless / need password / no hwmon`.
+4. **Физика каналов:** правый = CPU = `pwm1`/`fan1`, левый = GPU =
+   `pwm2`/`fan2`. Подписи слайдеров намеренно всегда по-английски
+   (`Right fan` / `Left fan`), телеметрия — на языке интерфейса.
+5. **Режимы и безопасность:** вход в Manual безопасен (драйвер снапшотит
+   RPM), выход в BIOS Auto — двойное подтверждение за 30 с (переход глушит
+   лопасти на ~215 с); автопилот — `fanlib.Smart`, шаг 1 с, останавливается
+   после 10 неудачных записей подряд; при закрытии TUI в режиме ручного
+   управления бэкенд держит `hold 180` PWM; авария CPU ≥ 93 / GPU ≥ 83 °C —
+   красная статус-строка.
+6. **Вкладки смонтированы постоянно** (переключение через `display`), иначе
+   `on_unmount` глушил бы автопилот; `_rebuilding` не даёт размонтировать
+   вкладку при смене языка — автопилот переживает RU↔EN.
+7. **i18n:** ~43 ключа `tui.*` + `kbd.fans_missing` в `locales/ru.json` и
+   `en.json` (по 149 ключей, расхождений нет), `kbd.usage` дополнен
+   подкомандой `fans`.
+8. **Документация (EN primary / RU secondary):** `README.md` и `README.ru.md`
+   — раздел «Fans — telemetry and control (vertil tab)» / «Вентиляторы —
+   телеметрия и управление»: что видно, зачем это нужно (медленная прошивка,
+   readback ≠ setpoint), таблица режимов, правила безопасности, схема
+   архитектуры TUI → vertil_core → `sudo -n victus-kbd fans` → fanctl →
+   hwmon; обновлены дерево проекта, таблица команд и номер версии.
+   `ROADMAP.md` (контрольные точки версий), `START_DEVELOPMENT.md`
+   (§2.1/2.2/2.3 — фены переехали из «не обёрнуто» в «сделано»),
+   `VERSION` → `1.1.0-beta`.
+9. **`.gitignore`:** бинарники стенда (`lab/cpuburn`, `lab/gpuload`, ~1.1 МБ)
+   и его runtime (`*.log`, `*.state`) не коммитятся — только исходники.
+
+### Изменённые файлы
+
+Новые: `bin/tui/vertil_tab.py`, `bin/tui/vertil_core.py`, `vertil/`
+(config, tools, docs — 25 файлов). Изменённые: `bin/victus-kbd`
+(подкоманда `fans`), `bin/tui/screens.py` (CSS вкладок, `_show_tab`,
+refresh/toggle_language), `locales/{ru,en}.json`, `README.md`,
+`README.ru.md`, `ROADMAP.md`, `START_DEVELOPMENT.md`, `PROGRESS_LOG.md`,
+`VERSION`, `.gitignore`.
+
+### Костыли / нюансы / ошибки
+
+- **readback ≠ setpoint:** hp-wmi на чтение отдаёт отображаемые обороты
+  (≈0.95× от записанного) — вкладка показывает последнюю отправленную
+  команду (`self._setpoint`), см. `vertil/docs/…-fan-hw-access-report.md` §7.
+- `@work`-декорированный метод нельзя передавать в `run_worker(...)`
+  (обёртка не принимает аргументы) — зовём напрямую; метод `_render`
+  конфликтовал с `Widget._render` → переименован в `_paint`.
+- Первый снапшот проставляет `_mode` из железа, иначе кнопка режима не
+  подсвечивалась; повторный клик «Manual» при уже ручном режиме не пишет в
+  hwmon (нет ложной ошибки про пароль).
+- Нумерация вентиляторов в телеметрии (`правый`/`левый`) ещё не дополнена
+  индексами Fan 1/Fan 2 — пожелание пользователя, отложено.
+- Тест `/tmp/opencode/vertil_smoke.py` не в репозитории (нужен Textual
+  `App.run_test`); он восстанавливает `config/locale` через atexit.
+- Смоук прогнан перед коммитом: **SMOKE OK**, локаль `ru`, AST/JSON OK.
+
+### Релиз
+
+Тег `v1.1.0-beta` → GitHub Release (prerelease), артефакт
+`victus-suite.tar.gz` собран из HEAD (`git archive --prefix=victus-suite/`),
+notes — EN основной + RU второстепенный. README-инструкция по установке
+обновлена на ссылку `releases/download/v1.1.0-beta/`.
 
 ---
 

@@ -81,32 +81,36 @@
 | Локализация ru/en | `bin/i18n.py` + `locales/*.json` | ✅ |
 | Симлинки + ярлык «Victus Suite» в меню + ч/б иконка | `install.sh` + `share/icons/` | ✅ (`desktop-file-validate` = VALID) |
 | **TUI «Подсветка» (v1.0.0-beta, Bento 960×540)** | `bin/victus_tui`, `bin/tui/` | ✅ живой тест + смоук **186/186** |
+| **Вкладка TUI «Вентиляторы» (`vertil`)** | `bin/tui/vertil_tab.py`, `bin/tui/vertil_core.py`, `vertil/` | ✅ живьём: телеметрия, Manual/SMART/AUTO, запись без пароля |
+| Вентиляторы: чтение/запись hwmon + автопилот | `vertil/tools/fanlib.py`, `vertil/tools/fanctl.py`, `bin/victus-kbd fans` | ✅ NOPASSWD-правило, пороги в `vertil/config/presets.json` |
 | Фоновый демон (unix-сокет, держит эффекты) | `bin/victusd` | ✅ |
 | Иконка в трее (AyatanaAppIndicator3) | `bin/victus-tray` | ✅ |
 | Проверка прав без лишнего sudo (`probe_access`) | `bin/tui/core.py` + `bin/victus-kbd` | ✅ (установлено sudoers NOPASSWD) |
-| Версия | `VERSION` | `1.0.0-beta` |
+| Версия | `VERSION` | `1.1.0-beta` |
 | Дорожная карта упаковки/дистрибуции | `ROADMAP.md` | ✅ R1…R5 |
 | Документация исследования | `docs/01..06` | ✅ |
 | Техническое задание | `TZ.md` | ✅ (§14 — версия 1.0.0-beta) |
 
-### 2.2. ДОСТУПНО В ЯДРЕ, НО НЕ ОБЁРНУТО КОДОМ (следующие шаги)
+### 2.2. ДОСТУПНО В ЯДРЕ, ЧАСТЬ УЖЕ ОБЁРНУТА (следующие шаги)
 
 > Всё это уже лежит в sysfs и проверено на этой машине — не надо изобретать.
 
 ```bash
-# ВЕНТИЛЯТОРЫ (hwmon "hp", driver hp-wmi)
+# ВЕНТИЛЯТОРЫ (hwmon "hp", driver hp-wmi) — ✅ ОБЁРНУТО с v1.1.0-beta:
+#   vertil/tools/fanlib.py (чтение + контроллер), vertil/tools/fanctl.py
+#   (запись), вкладка TUI «Вентиляторы», `victus-kbd fans <cmd>`
 /sys/class/hwmon/hwmon7/pwm1_enable    # 0=MAX, 1=MANUAL, 2=AUTO
 /sys/class/hwmon/hwmon7/pwm1           # 0..255 (только при enable=1)
 /sys/class/hwmon/hwmon7/pwm2           # второй канал (общий enable)
-/sys/class/hwmon/hwmon7/fan1_input     # RPM CPU
-/sys/class/hwmon/hwmon7/fan2_input     # RPM GPU
+/sys/class/hwmon/hwmon7/fan1_input     # RPM CPU (правый)
+/sys/class/hwmon/hwmon7/fan2_input     # RPM GPU (левый)
 
-# ТЕМПЕРАТУРЫ
+# ТЕМПЕРАТУРЫ — читаются в TUI через fanlib, отдельной команды `monitor` пока нет
 /sys/class/hwmon/hwmon8/temp1_input    # coretemp Package (миллиградусы)
 /sys/class/hwmon/hwmon1/temp1_input    # acpitz
 nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader
 
-# РЕЖИМЫ ПИТАНИЯ (аналог Comfort/Default/Performance)
+# РЕЖИМЫ ПИТАНИЯ (аналог Comfort/Default/Performance) — ❌ не обёрнуто
 /sys/firmware/acpi/platform_profile            # low-power|balanced|performance
 powerprofilesctl set performance|balanced|power-saver
 ```
@@ -118,9 +122,8 @@ BIOS требует stagger **10 с** между вентиляторами; р�
 
 ### 2.3. Чего ещё НЕТ
 
-- Обёртки над вентиляторами и температурами (команды `fan`, `monitor`).
-- Команды `profile` (пресеты питания).
-- **Вкладки TUI «Фены» / «Питание»** (в TUI есть только «Подсветка»).
+- Обёртки над температурами и режимами питания (команды `monitor`, `profile`).
+- **Вкладка TUI «Питание»** («Подсветка» и «Вентиляторы» уже есть).
 - **Упаковки в pip-пакет, автозапуска, дистрибуции** —
   это и есть содержимое `ROADMAP.md` (этапы R1…R5).
   Уже сделано из R2: ярлык в меню + иконка (`./install.sh`), осталось —

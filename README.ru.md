@@ -2,7 +2,7 @@
 
 > [English (primary) →](README.md) · **Русская версия**
 
-**Версия:** v1.0.0-beta · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
+**Версия:** v1.1.0-beta · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
 
 Аналог OMEN Gaming Hub для Linux: подсветка клавиатуры HP Victus/OMEN,
 режимы питания, вентиляторы, мониторинг и оверлей (замена Shift+F2).
@@ -16,7 +16,7 @@
 этап 2 (TUI на Textual), этап 3 (эффекты и профили питания).
 Подробности — `START_DEVELOPMENT.md` §4.
 
-## Установка (v1.0.0-beta)
+## Установка (v1.1.0-beta)
 
 **Из релиза (рекомендуется):**
 
@@ -26,7 +26,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # движок TUI (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.0.0-beta/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.0-beta/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # симлинки + ярлык в меню
 ```
@@ -50,6 +50,10 @@ echo "$USER ALL=(root) NOPASSWD: $PWD/bin/victus-kbd" | sudo tee /etc/sudoers.d/
 sudo chmod 440 /etc/sudoers.d/victus-suite
 ```
 
+То же правило покрывает и backend вентиляторов: TUI пишет PWM как
+`sudo -n …/bin/victus-kbd fans <cmd>` (`fans` → `vertil/tools/fanctl.py`),
+поэтому вкладка **vertil** тоже никогда не спрашивает пароль.
+
 **Запуск:**
 
 ```bash
@@ -71,12 +75,13 @@ victus-tray            # трей: открыть окно / старт-стоп
 | `victus-kbd cycle <c...> [--delay S] [--bg]` | Цикл цветов в фоне | да |
 | `victus-kbd stop` | Остановить цикл | да |
 | `victus-kbd get` / `dump [start] [len]` | Текущий RGB / дамп EC | да |
+| `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | вентиляторы vertil (PWM в hwmon) | по правилу выше |
 | `ColorMaker list\|add\|rm\|palette` | Именованные цвета (только english) | нет |
 | `Changer <имя\|R G B\|#RRGGBB\|random\|off>` | Применить цвет | спросит sudo |
 | `Changer cycle-red` | **Цикл ярко-красных** (red/fire/scarlet/darkred) | спросит sudo |
 | `Changer cycle <цвета> [--delay S]` | Свой цикл | спросит sudo |
 | `Changer stop` | Остановить цикл | спросит sudo |
-| `victus_tui [--window\|--tray]` | **TUI (v1.0-beta)** — Bento 960×540: пресеты, HSV, эффекты | спросит sudo |
+| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — Bento 960×540: пресеты, HSV, эффекты, **вкладка фенов** | спросит sudo |
 | `victusd [--verbose\|--quit]` | фоновый демон (unix-сокет, держит эффекты живыми) | нет |
 | `victus-tray` | иконка в трее: открыть окно / старт-стоп / выход | нет |
 | `victus-report [--with-ec]` | Диагностика + логи в один файл | нет |
@@ -100,10 +105,10 @@ Changer 120 200 255          # произвольный RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # своё имя (english)
 Changer mycolor
-victus_tui                   # TUI (бета, v1.0.0-beta)
+victus_tui                   # TUI (бета, v1.1.0-beta)
 ```
 
-### TUI (v1.0.0-beta)
+### TUI (v1.1.0-beta)
 
 ```bash
 victus_tui                   # запуск (при записи в EC спросит sudo)
@@ -134,7 +139,95 @@ TUI — **тонкая обёртка над CLI**: каждая запись в
 старт-стоп из трея.
 
 **Исправлено с альфы:** слайдеры тянутся мышью (текст больше не выделяется).
-Остальное на следующий этап — см. `ROADMAP.md`.
+
+## Вентиляторы — телеметрия и управление (вкладка `vertil`)
+
+В TUI две вкладки: **Клавиатура** (подсветка) и **Вентиляторы** (`vertil`).
+Вкладка отвечает на три вопроса: какая сейчас температура, кто управляет
+лопастями и что будет, если что-то пойдёт не так.
+
+### Что на экране
+
+```
+ ТЕЛЕМЕТРИЯ           УПРАВЛЕНИЕ              БЕЗОПАСНОСТЬ
+ CPU  61.0 °C max 99  [*] Ручной              guard   CPU 99 · GPU 88 °C
+ GPU  55.0 °C 42 %    [ ] SMART               smart   60..255 PWM
+ VRM* плата 48.2 °C   [ ] Авто BIOS           emerg   CPU 93 · GPU 83 °C
+ правый  2540 RPM     Right fan [====] 128    hold    180 PWM
+ левый   2410 RPM     Left  fan [====] 128    preset  victus-2026-09-30
+ MODE manual          (запись через 0.4 с)    доступ  без пароля
+ ──────────────────────────────────────────────────────────────────────
+статус: SMART ▸ 128/140
+```
+
+Телеметрия опрашивается раз в секунду и **читается без root**: температуры,
+обороты и PWM из hwmon плюс `nvidia-smi` (в отдельном потоке — на запрос
+уходит до ~3 с, интерфейс не подвисает). Подписи слайдеров намеренно
+английские: `Right fan` = CPU, `Left fan` = GPU (левый/правый в телеметрии —
+на языке интерфейса).
+
+### Зачем это нужно
+
+- **Заводская кривая медленная и горячая**: передача фенов обратно прошивке
+  (`set-mode 2`) выключает обе лопасти примерно на **215 с**, прежде чем они
+  снова раскрутятся (`safety.auto_transition_zero_rpm_seconds`, замерено в
+  трёхфазном тесте). Под нагрузкой это разница между 92 °C и 99 °C.
+- **`hp-wmi` не отдаёт заданное значение обратно**: `pwm*` на чтение — это
+  отображаемые обороты, с дрожанием около 0.95× от записанного
+  (`vertil/docs/2026-09-30-fan-hw-access-report.md` §7). Наивный контур
+  «прочитал-изменил-записал» поэтому раскачивается — вкладка показывает
+  последнюю отправленную команду, а не дрожащее считывание.
+- Сделать игровой ноутбу тише, не сварив его, может только быстрый,
+  видимый и обратимый контроллер — это **SMART**.
+
+### Режимы
+
+| Режим | Что делает | Примечания |
+|---|---|---|
+| **Ручной** | два слайдера задают PWM 0..255 (0–100 %) каждому вентилятору, запись через 0.4 с после последнего движения | вход в ручной режим безопасен (драйвер снапшотит текущие обороты) |
+| **SMART** | автопилот: предиктивный контроллер, шаг 1 с, пороги из `vertil/config/presets.json` | слайдеры блокируются, в статусе `SMART ▸ pwm1/pwm2` |
+| **Авто BIOS** | оба вентилятора уходят прошивке | нужен **повторный клик за 30 с** — см. ниже |
+
+### Безопасность
+
+1. **Выход в «Авто BIOS» подтверждается дважды** (окно 30 с): переход
+   выключает вентиляторы примерно на 215 с — один случайный клик не должен
+   этого делать.
+2. **Закрытие TUI в ручном режиме не оставляет лопасти без контроля**:
+   backend держит `safety.hold_pwm_on_controller_loss` (180 PWM ≈ 70 %) —
+   то же правило, что и в лабораторном `guard.sh` при умершем контроллере.
+3. **SMART останавливается после 10 неудачных подряд записей** и пишет
+   причину; в фоне ничего не крутится бесконечно.
+4. **Аварийный чип:** CPU ≥ 93 °C или GPU ≥ 83 °C — статусная строка красная.
+5. **Ничего не притворяется рабочим:** если нет hwmon `hp` или правила без
+   пароля, вердикт проверки печатается в панели БЕЗОПАСНОСТЬ (`без пароля` /
+   `нужен sudo` / `нет hwmon`) вместо молчаливого отказа при следующей записи.
+
+### Как это устроено
+
+```
+VertilTab (Textual, опрос 1 с, все блокирующие вызовы в потоках)
+ ├─ чтение ─► tui/vertil_core.snapshot() ─► vertil/tools/fanlib.Sensors  без root
+ │              температуры/обороты/PWM из hwmon + nvidia-smi
+ ├─ запись ─► tui/vertil_core.call("set-pwm" | "set-mode" | "hold")
+ │              └─► sudo -n bin/victus-kbd fans <cmd>   ← NOPASSWD-правило выше
+ │                  └─► vertil/tools/fanctl.py ─► fanlib ─► /sys/.../hwmon*  root
+ └─ контроллер: vertil/tools/fanlib.Smart (шаг 1 с) живёт в TUI —
+                fanctl только пишет, никакой логики управления в нём нет
+```
+
+- **`vertil/` самодостаточен**: `config/presets.json` (устройство, пороги,
+  происхождение данных), `tools/fanlib.py` (датчики + контроллер),
+  `tools/fanctl.py` (CLI записи, одна команда — один процесс),
+  `tools/lab/` (трёхфазный стенд), `docs/` (отчёты по железу). В систему
+  ничего не ставится — пишутся только регистры hwmon.
+- **Один вентилятор = одна сторона:** правый = CPU = `pwm1`/`fan1`,
+  левый = GPU = `pwm2`/`fan2`.
+- Цикл SMART **продолжает работать, пока вы на вкладке клавиатуры**; опрос
+  телеметрии приостанавливается только когда вкладка фенов скрыта и
+  автопилота нет.
+- Backend доступен и без TUI:
+  `victus-kbd fans status | set-pwm A B | set-mode 0|1|2 | hold N`.
 
 ## Язык интерфейса (локализация)
 
@@ -179,7 +272,7 @@ victus-suite/
 ├── PROGRESS_LOG.md               ← журнал контекста (статус, время, следующий шаг)
 ├── ROADMAP.md                    ← следующий этап: скрипт → устанавливаемое приложение
 ├── TZ.md                         ← полное техническое задание
-├── VERSION                       ← 1.0.0-beta (источник правды по версии)
+├── VERSION                       ← 1.1.0-beta (источник правды по версии)
 ├── install.sh                    ← ./install.sh [--remove] → симлинки + ярлык меню + иконки
 ├── share/
 │   └── icons/                    ← ч/б иконка: victus-suite.svg, PNG для hicolor, make_icon.py
@@ -190,9 +283,16 @@ victus-suite/
 │   victus_log.py (логирование)   i18n.py (перевод)   victus_palette.py
 │   tui/                          ← модули TUI
 │     core.py (EC/проверка прав, движок, delay_for_speed)
-│     screens.py (макет Bento, кнопка языка)
+│     screens.py (макет Bento, вкладки, кнопка языка)
 │     kbd_tab.py (пресеты/пикер/эффекты, kill_loop, calm)
+│     vertil_tab.py (вкладка фенов: телеметрия, режимы, цикл SMART)
+│     vertil_core.py (мост чтения/записи, probe sudo -n, hold на выходе)
 │     slider.py (ASCII-слайдеры, SineWave)
+├── vertil/                       ← backend вентиляторов, самодостаточный
+│   ├── config/                   ← presets.json: устройство, пороги, происхождение
+│   ├── tools/                    ← fanlib.py (датчики + SMART), fanctl.py (CLI записи)
+│   │   └── lab/                  ← трёхфазный стенд (cpuburn, gpuload, guard)
+│   └── docs/                     ← отчёты по железу + замеренные логи тестов
 ├── locales/                      ← ru.json, en.json (тексты интерфейса)
 ├── config/                       ← colors.conf, locale, profiles.d/, curves.d/
 ├── logs/                         ← victus.log (+ ротация .1..5)   [не в git]

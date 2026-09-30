@@ -5,6 +5,12 @@ state/
 # TUI screenshot artifacts (save_screenshot writes SVG into cwd)
 victus-suite_*.svg
 
+# vertil lab: build artifacts + runtime (only sources are committed)
+vertil/tools/lab/cpuburn
+vertil/tools/lab/gpuload
+vertil/tools/lab/*.log
+vertil/tools/lab/*.state
+
 # python
 __pycache__/
 *.py[cod]
