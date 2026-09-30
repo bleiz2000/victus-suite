@@ -13,14 +13,14 @@
 | Поле | Значение |
 |---|---|
 | **Фаза** | **v1.1.1 — автозапуск SMART + плавность циклов**: TUI при открытии сам включает SMART (первый запуск) и возвращает **ваш** выбор режима из `state/fan_mode.json` (Manual/AUTO не сбрасываются), TUI сам поднимает `victusd` (`ensure_daemon`), цветовые циклы плавнее (64 ступени при том же периоде петли, замер: петля 3.91 с при speed1), язык по умолчанию **en (us)**, −17 мёртвых ключей локалей. Ранее закрытый этап `v1.1.0-beta` (вкладка «Вентиляторы»: телеметрия без root, Manual / SMART / BIOS Auto, два слайдера PWM 0..255, пороги и hold из `vertil/config/presets.json`, запись **без пароля** через `sudo -n victus-kbd fans …`) остаётся в силе |
-| **Ветка / коммит** | `main`, релизный тег **`v1.1.1`** (хеш: `git rev-parse v1.1.1`); предыдущие: `72618fc docs(vertil): отчёт сессии…`, `35cc07a` (тег `v1.1.0-beta`) |
-| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: **`v1.1.1`** (обычный, артефакт `victus-suite.tar.gz` из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.1), **`v1.1.0-beta`** (prerelease, 30.09 21:52, артефакт `victus-suite.tar.gz` **193 134 байта / 100 файлов** из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.0-beta) и предыдущий `v1.0.0-beta` |
+| **Ветка / коммит** | `main` @ `17e3d77 feat(vertil): SMART-автозапуск с памятью режима + плавность циклов (v1.1.1)` (запушен, тег **`v1.1.1`** — на нём же); предыдущие: `72618fc docs(vertil): отчёт сессии…`, `35cc07a` (тег `v1.1.0-beta`) |
+| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: **`v1.1.1`** (обычный, 30.09 23:36, артефакт `victus-suite.tar.gz` **204 963 байта / 69 файлов** из `git archive --prefix=victus-suite/`, `/releases/latest` → v1.1.1, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.1), **`v1.1.0-beta`** (prerelease, 30.09 21:52, артефакт `victus-suite.tar.gz` **193 134 байта / 100 файлов** из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.0-beta) и предыдущий `v1.0.0-beta` |
 | **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; проверка цикла `--delay` на EC ✅; **`./install.sh` → ярлык «Victus Suite» + иконка, `desktop-file-validate` = VALID** ✅; **vertil**: консольный пульт готов, чтение телеметрии live ✅, probe прав `sudo -n victus-kbd fans status/set-pwm` → `rc=0` без пароля ✅; **запись из вкладки на живом железе ✅** (`set-mode`/`set-pwm`/`hold 180` в логе, чек-лист §7 отчёта закрыт); **SMART-автозапуск живьём ✅** (первый запуск → SMART, `state/fan_mode.json=smart`, `daemon ping=True`) |
 | **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5); смоук вкладки `/tmp/opencode/vertil_smoke.py` — **SMOKE OK** (переключение вкладок, смена языка без потери автопилота, locale вернулся в `en`); тест восстановления режима `/tmp/opencode/restore_test.py` — **7 сценариев OK**; отчёт сессии — `vertil/docs/2026-09-30-tui-integration-session.md` |
 | **Не обёрнуто кодом** | температуры (отдельной команды `monitor` нет — в TUI читаются через fanlib), режимы питания/профили, вкладка TUI «Питание». **Вентиляторы обёрнуты**, автозапуск SMART и память режима — с v1.1.1 |
 | **Следующий этап** | `ROADMAP.md`: R2 (остатки: проверка зависимостей, sudoers-генерация, `make install`) → R3 systemd --user + трей → R4 релизы/AUR → R5 тесты в CI |
 | **Известные косяки** | hp-wmi не отдаёт setpoint: `pwm*` на чтение ≈0.95× от записанного → статус показывает последнюю команду (by design, report §7); 18 неиспользуемых ключей `tui.*` в локалях; 17 удалённых мёртвых ключей больше не мешают (в локалях `unused=0`); навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
-| **Последнее изменение** | 2026-09-30 23:35 +04 |
+| **Последнее изменение** | 2026-09-30 23:40 +04 |
 
 ---
 
@@ -104,9 +104,13 @@
 
 ### Релиз
 
-Тег `v1.1.1` → GitHub Release (обычный): артефакт `victus-suite.tar.gz`
-(`git archive --format=tar.gz --prefix=victus-suite/`), notes EN + RU,
-README-ссылка `releases/download/v1.1.1/`. Тег и `main` запушены.
+Тег `v1.1.1` → GitHub Release (обычный, **`/releases/latest` указывает на
+него**) создан: https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.1 —
+артефакт `victus-suite.tar.gz` **204 963 байта / 69 файлов** (runtime и
+`state/`/`logs/` не попали), notes EN + RU
+(`/tmp/opencode/release_notes_v1.1.1.md`), ссылка из README
+`releases/download/v1.1.1/victus-suite.tar.gz` отвечает **200**.
+Коммит `17e3d77` и тег запушены.
 
 ---
 
