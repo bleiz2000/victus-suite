@@ -81,8 +81,8 @@
 | Локализация ru/en | `bin/i18n.py` + `locales/*.json` | ✅ |
 | Симлинки + ярлык «Victus Suite» в меню + ч/б иконка | `install.sh` + `share/icons/` | ✅ (`desktop-file-validate` = VALID) |
 | **TUI «Подсветка» (v1.0.0-beta, Bento 960×540)** | `bin/victus_tui`, `bin/tui/` | ✅ живой тест + смоук **186/186** |
-| **Вкладка TUI «Вентиляторы» (`vertil`)** | `bin/tui/vertil_tab.py`, `bin/tui/vertil_core.py`, `vertil/` | ✅ живьём: телеметрия, Manual/SMART/AUTO, запись без пароля |
-| Вентиляторы: чтение/запись hwmon + автопилот | `vertil/tools/fanlib.py`, `vertil/tools/fanctl.py`, `bin/victus-kbd fans` | ✅ NOPASSWD-правило, пороги в `vertil/config/presets.json` |
+| **Вкладка TUI «Вентиляторы» (`vertil`)** | `bin/tui/vertil_tab.py`, `bin/tui/vertil_core.py`, `vertil/` | ✅ интеграция + headless-смоук **SMOKE OK**; ⬜ финальная запись на живом железе |
+| Вентиляторы: чтение/запись hwmon + автопилот | `vertil/tools/fanlib.py`, `vertil/tools/fanctl.py`, `bin/victus-kbd fans` | ✅ NOPASSWD-правило (probe `rc=0`), пороги в `vertil/config/presets.json`; ⬜ live-чек-лист §7 отчёта сессии |
 | Фоновый демон (unix-сокет, держит эффекты) | `bin/victusd` | ✅ |
 | Иконка в трее (AyatanaAppIndicator3) | `bin/victus-tray` | ✅ |
 | Проверка прав без лишнего sudo (`probe_access`) | `bin/tui/core.py` + `bin/victus-kbd` | ✅ (установлено sudoers NOPASSWD) |

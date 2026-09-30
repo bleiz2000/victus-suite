@@ -228,6 +228,11 @@ VertilTab (Textual, 1 s poll, all blocking calls in worker threads)
 - The same backend is usable without the TUI:
   `victus-kbd fans status | set-pwm A B | set-mode 0|1|2 | hold N`.
 
+**Status:** console pult + TUI tab are integrated and verified with a
+headless smoke suite; the passwordless write probe passes on this machine.
+**Final live-write validation from the tab is still pending** — checklist in
+`vertil/docs/2026-09-30-tui-integration-session.md` §7.
+
 ## Interface language (localization)
 
 Default is **Russian**. Messages live in `locales/<code>.json`,
