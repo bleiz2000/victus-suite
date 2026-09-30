@@ -13,14 +13,14 @@
 | Поле | Значение |
 |---|---|
 | **Фаза** | **v1.1.0-beta — вкладка «Вентиляторы» (`vertil`)**: телеметрия без root (CPU/GPU/VRM, RPM, PWM, режим hwmon), режимы Manual / SMART (автопилот) / BIOS Auto, два слайдера PWM 0..255 с задержкой записи 0.4 с, пороги и hold из `vertil/config/presets.json`, запись **без пароля** через `sudo -n victus-kbd fans …`. Ранее закрытый этап `v1.0.0-beta` (Bento-TUI, спокойный режим, трей, ярлык меню) остаётся в силе |
-| **Ветка / коммит** | `main` @ коммит этой записи `feat(vertil): …` (запушен, тег `v1.1.0-beta` на нём) |
-| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: `v1.1.0-beta` (prerelease, артефакт `victus-suite.tar.gz` из `git archive --prefix=victus-suite/`) и предыдущий `v1.0.0-beta` |
+| **Ветка / коммит** | `main` @ `35cc07a feat(vertil): вкладка «Вентиляторы» …` (запушен, тег `v1.1.0-beta` — на нём же) |
+| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: **`v1.1.0-beta`** (prerelease, 30.09 21:52, артефакт `victus-suite.tar.gz` **193 134 байта / 100 файлов** из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.0-beta) и предыдущий `v1.0.0-beta` |
 | **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; проверка цикла `--delay` на EC ✅; **`./install.sh` → ярлык «Victus Suite» + иконка, `desktop-file-validate` = VALID** ✅; **вкладка vertil живьём**: `sudo -n victus-kbd fans status/set-pwm/set-mode` → rc=0, автопилот реально управляет лопастями ✅ |
 | **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5); смоук вкладки `/tmp/opencode/vertil_smoke.py` — **SMOKE OK** (переключение вкладок, смена языка без потери автопилота, restore `config/locale`→`ru`) |
 | **Не обёрнуто кодом** | температуры (отдельной команды `monitor` нет — в TUI читаются через fanlib), режимы питания/профили, вкладка TUI «Питание». **Вентиляторы обёрнуты** |
 | **Следующий этап** | `ROADMAP.md`: R2 (остатки: проверка зависимостей, sudoers-генерация, `make install`) → R3 systemd --user + трей → R4 релизы/AUR → R5 тесты в CI |
 | **Известные косяки** | hp-wmi не отдаёт setpoint: `pwm*` на чтение ≈0.95× от записанного → статус показывает последнюю команду (by design, report §7); 18 неиспользуемых ключей `tui.*` в локалях; навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
-| **Последнее изменение** | 2026-09-30 21:47 +04 |
+| **Последнее изменение** | 2026-09-30 21:53 +04 |
 
 ---
 
@@ -105,10 +105,13 @@ refresh/toggle_language), `locales/{ru,en}.json`, `README.md`,
 
 ### Релиз
 
-Тег `v1.1.0-beta` → GitHub Release (prerelease), артефакт
-`victus-suite.tar.gz` собран из HEAD (`git archive --prefix=victus-suite/`),
-notes — EN основной + RU второстепенный. README-инструкция по установке
-обновлена на ссылку `releases/download/v1.1.0-beta/`.
+Тег `v1.1.0-beta` → GitHub Release (prerelease) **создан**:
+https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.0-beta,
+артефакт `victus-suite.tar.gz` собран из тега
+(`git archive --format=tar.gz --prefix=victus-suite/`), 193 134 байта,
+100 файлов, бинарники/runtime стенда в архив не попали; notes — EN основной
++ RU второстепенный. README-инструкция по установке обновлена на ссылку
+`releases/download/v1.1.0-beta/`. Тег и `main` запушены (`35cc07a`).
 
 ---
 
