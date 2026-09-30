@@ -252,7 +252,7 @@ config/locale         файл с текущим языком (содержит:
 bin/i18n.py          загрузчик: t("раздел.ключ", параметры=...)
 ```
 
-Приоритет языка: `VICTUS_LANG` → `config/locale` → `ru`.
+Приоритет языка: `VICTUS_LANG` → `config/locale` → `en` (по умолчанию us-English).
 
 **Как добавить язык:**
 1. `cp locales/ru.json locales/de.json`
