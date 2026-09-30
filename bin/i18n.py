@@ -2,8 +2,8 @@
 
 Источники языка (по приоритету):
   1. переменная окружения VICTUS_LANG   (ru / en / ...)
-  2. файл config/locale                 (обычно содержит "ru")
-  3. по умолчанию                      "ru"
+  2. файл config/locale                 (обычно содержит "en")
+  3. по умолчанию                      "en" (us-English)
 
 Словари лежат в locales/<код>.json (вложенность: "раздел.ключ": "текст").
 Отсутствующий ключ/язык берётся из en.json, затем возвращается сам ключ.
@@ -21,7 +21,7 @@ _HERE = os.path.dirname(os.path.realpath(__file__))
 _PROJECT = os.path.dirname(_HERE) if os.path.basename(_HERE) == "bin" else _HERE
 LOCALES_DIR = os.path.join(_PROJECT, "locales")
 CONFIG_LOCALE = os.path.join(_PROJECT, "config", "locale")
-DEFAULT_LANG = "ru"
+DEFAULT_LANG = "en"
 FALLBACK_LANG = "en"
 
 _cache = {}

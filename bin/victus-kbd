@@ -187,12 +187,17 @@ def cmd_cycle(args):
         f.write(str(os.getpid()))
     vlog.log_info(TOOL, f"cycle loop pid={os.getpid()} colors={rgb_list} delay={delay}")
     print(t("kbd.cycle_loop", colors=rgb_list, delay=delay), flush=True)
+    # шаг = запись (замер: ≈3-4 мс); чтение-проверка стоит ~90 мс и почти
+    # вдвое замедляла бы петлю — ради debug-строки оставляем её только при
+    # VICTUS_LOG=debug (см. vlog.debug_enabled)
+    with_read = vlog.debug_enabled()
     try:
         while True:
             for rgb in rgb_list:
                 write_rgb(*rgb)
-                got = read_rgb()
-                vlog.log_debug(TOOL, f"cycle -> {got}")
+                if with_read:
+                    got = read_rgb()
+                    vlog.log_debug(TOOL, f"cycle -> {got}")
                 time.sleep(delay)
     except KeyboardInterrupt:
         vlog.log_info(TOOL, "cycle interrupted by user")

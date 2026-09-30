@@ -81,12 +81,13 @@
 | Локализация ru/en | `bin/i18n.py` + `locales/*.json` | ✅ |
 | Симлинки + ярлык «Victus Suite» в меню + ч/б иконка | `install.sh` + `share/icons/` | ✅ (`desktop-file-validate` = VALID) |
 | **TUI «Подсветка» (v1.0.0-beta, Bento 960×540)** | `bin/victus_tui`, `bin/tui/` | ✅ живой тест + смоук **186/186** |
-| **Вкладка TUI «Вентиляторы» (`vertil`)** | `bin/tui/vertil_tab.py`, `bin/tui/vertil_core.py`, `vertil/` | ✅ интеграция + headless-смоук **SMOKE OK**; ⬜ финальная запись на живом железе |
-| Вентиляторы: чтение/запись hwmon + автопилот | `vertil/tools/fanlib.py`, `vertil/tools/fanctl.py`, `bin/victus-kbd fans` | ✅ NOPASSWD-правило (probe `rc=0`), пороги в `vertil/config/presets.json`; ⬜ live-чек-лист §7 отчёта сессии |
+| **Вкладка TUI «Вентиляторы» (`vertil`)** | `bin/tui/vertil_tab.py`, `bin/tui/vertil_core.py`, `vertil/` | ✅ интеграция + headless-смоук **SMOKE OK** + живой прогон (запись `set-mode`/`set-pwm`, `hold 180` при выходе) |
+| Вентиляторы: чтение/запись hwmon + автопилот | `vertil/tools/fanlib.py`, `vertil/tools/fanctl.py`, `bin/victus-kbd fans` | ✅ NOPASSWD-правило (probe `rc=0`), пороги в `vertil/config/presets.json`, live-чек-лист §7 отчёта сессии закрыт |
+| **SMART-автозапуск + память режима (v1.1.1)** | `bin/tui/vertil_tab.py` (`_restore_mode`), `bin/tui/vertil_core.py` (`fan_mode_load/save`), `state/fan_mode.json` | ✅ логика (7 сценариев) + живой прогон; TUI сам поднимает `victusd` (`ensure_daemon`) |
 | Фоновый демон (unix-сокет, держит эффекты) | `bin/victusd` | ✅ |
 | Иконка в трее (AyatanaAppIndicator3) | `bin/victus-tray` | ✅ |
 | Проверка прав без лишнего sudo (`probe_access`) | `bin/tui/core.py` + `bin/victus-kbd` | ✅ (установлено sudoers NOPASSWD) |
-| Версия | `VERSION` | `1.1.0-beta` |
+| Версия | `VERSION` | `1.1.1` |
 | Дорожная карта упаковки/дистрибуции | `ROADMAP.md` | ✅ R1…R5 |
 | Документация исследования | `docs/01..06` | ✅ |
 | Техническое задание | `TZ.md` | ✅ (§14 — версия 1.0.0-beta) |
@@ -141,8 +142,8 @@ BIOS требует stagger **10 с** между вентиляторами; р�
 - **TUI-интерфейс: библиотека Textual** (в системе — `python-textual` 8.2.8
   из pacman; **в 8.2.8 нет виджета `Slider`**, поэтому слайдер написан
   вручную — `bin/tui/slider.py` `MiniSlider`).
-- **Локализация: `locales/`** (JSON), по умолчанию **русский**, доступен
-  английский. См. §6.
+- **Локализация: `locales/`** (JSON), по умолчанию **английский (us)**,
+  доступен русский. См. §6.
 - Стиль кода: без комментариев-«воды», функции маленькие, ошибки — через
   `die()` + запись в лог.
 
@@ -245,9 +246,9 @@ BIOS требует stagger **10 с** между вентиляторами; р�
 ## 6. Локализация (i18n)
 
 ```
-locales/ru.json      русский (по умолчанию)
-locales/en.json      английский (fallback)
-config/locale         файл с текущим языком (содержит: ru)
+locales/ru.json      русский (исходник текстов)
+locales/en.json      английский (по умолчанию, fallback)
+config/locale         файл с текущим языком (содержит: en)
 bin/i18n.py          загрузчик: t("раздел.ключ", параметры=...)
 ```
 

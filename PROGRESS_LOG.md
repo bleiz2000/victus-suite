@@ -12,15 +12,101 @@
 
 | Поле | Значение |
 |---|---|
-| **Фаза** | **v1.1.0-beta — вкладка «Вентиляторы» (`vertil`)**: телеметрия без root (CPU/GPU/VRM, RPM, PWM, режим hwmon), режимы Manual / SMART (автопилот) / BIOS Auto, два слайдера PWM 0..255 с задержкой записи 0.4 с, пороги и hold из `vertil/config/presets.json`, запись **без пароля** через `sudo -n victus-kbd fans …`. Ранее закрытый этап `v1.0.0-beta` (Bento-TUI, спокойный режим, трей, ярлык меню) остаётся в силе |
-| **Ветка / коммит** | `main` @ `35cc07a feat(vertil): вкладка «Вентиляторы» …` (запушен, тег `v1.1.0-beta` — на нём же) |
-| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: **`v1.1.0-beta`** (prerelease, 30.09 21:52, артефакт `victus-suite.tar.gz` **193 134 байта / 100 файлов** из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.0-beta) и предыдущий `v1.0.0-beta` |
-| **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; проверка цикла `--delay` на EC ✅; **`./install.sh` → ярлык «Victus Suite» + иконка, `desktop-file-validate` = VALID** ✅; **vertil**: консольный пульт готов, чтение телеметрии live ✅, probe прав `sudo -n victus-kbd fans status/set-pwm` → `rc=0` без пароля ✅; **финальная запись из вкладки на живом железе — предстоит** (чек-лист: `vertil/docs/2026-09-30-tui-integration-session.md` §7) |
-| **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5); смоук вкладки `/tmp/opencode/vertil_smoke.py` — **SMOKE OK** (переключение вкладок, смена языка без потери автопилота, locale вернулся в `ru`); отчёт сессии — `vertil/docs/2026-09-30-tui-integration-session.md` |
-| **Не обёрнуто кодом** | температуры (отдельной команды `monitor` нет — в TUI читаются через fanlib), режимы питания/профили, вкладка TUI «Питание». **Вентиляторы обёрнуты** |
-| **Следующий этап** | **финальный live-тест записи вентиляторов из вкладки** (чек-лист §7 отчёта сессии) → `ROADMAP.md`: R2 (остатки: проверка зависимостей, sudoers-генерация, `make install`) → R3 systemd --user + трей → R4 релизы/AUR → R5 тесты в CI |
-| **Известные косяки** | hp-wmi не отдаёт setpoint: `pwm*` на чтение ≈0.95× от записанного → статус показывает последнюю команду (by design, report §7); 18 неиспользуемых ключей `tui.*` в локалях; навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
-| **Последнее изменение** | 2026-09-30 22:01 +04 |
+| **Фаза** | **v1.1.1 — автозапуск SMART + плавность циклов**: TUI при открытии сам включает SMART (первый запуск) и возвращает **ваш** выбор режима из `state/fan_mode.json` (Manual/AUTO не сбрасываются), TUI сам поднимает `victusd` (`ensure_daemon`), цветовые циклы плавнее (64 ступени при том же периоде петли, замер: петля 3.91 с при speed1), язык по умолчанию **en (us)**, −17 мёртвых ключей локалей. Ранее закрытый этап `v1.1.0-beta` (вкладка «Вентиляторы»: телеметрия без root, Manual / SMART / BIOS Auto, два слайдера PWM 0..255, пороги и hold из `vertil/config/presets.json`, запись **без пароля** через `sudo -n victus-kbd fans …`) остаётся в силе |
+| **Ветка / коммит** | `main`, релизный тег **`v1.1.1`** (хеш: `git rev-parse v1.1.1`); предыдущие: `72618fc docs(vertil): отчёт сессии…`, `35cc07a` (тег `v1.1.0-beta`) |
+| **GitHub** | ✅ `https://github.com/bleiz2000/victus-suite` (публичный, `gh` авторизован), релизы: **`v1.1.1`** (обычный, артефакт `victus-suite.tar.gz` из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.1), **`v1.1.0-beta`** (prerelease, 30.09 21:52, артефакт `victus-suite.tar.gz` **193 134 байта / 100 файлов** из `git archive --prefix=victus-suite/`, notes EN+RU — https://github.com/bleiz2000/victus-suite/releases/tag/v1.1.0-beta) и предыдущий `v1.0.0-beta` |
+| **Работает на железе** | CLI: `Changer pink/red/hex/rgb`, dry-run, палитра; **TUI живьём**; проверка цикла `--delay` на EC ✅; **`./install.sh` → ярлык «Victus Suite» + иконка, `desktop-file-validate` = VALID** ✅; **vertil**: консольный пульт готов, чтение телеметрии live ✅, probe прав `sudo -n victus-kbd fans status/set-pwm` → `rc=0` без пароля ✅; **запись из вкладки на живом железе ✅** (`set-mode`/`set-pwm`/`hold 180` в логе, чек-лист §7 отчёта закрыт); **SMART-автозапуск живьём ✅** (первый запуск → SMART, `state/fan_mode.json=smart`, `daemon ping=True`) |
+| **Смоук-сьюты** | 6 сьютов в `/tmp/opencode/v2/` — **186/186 PASS** (в репозиторий ещё не перенесены → ROADMAP R5); смоук вкладки `/tmp/opencode/vertil_smoke.py` — **SMOKE OK** (переключение вкладок, смена языка без потери автопилота, locale вернулся в `en`); тест восстановления режима `/tmp/opencode/restore_test.py` — **7 сценариев OK**; отчёт сессии — `vertil/docs/2026-09-30-tui-integration-session.md` |
+| **Не обёрнуто кодом** | температуры (отдельной команды `monitor` нет — в TUI читаются через fanlib), режимы питания/профили, вкладка TUI «Питание». **Вентиляторы обёрнуты**, автозапуск SMART и память режима — с v1.1.1 |
+| **Следующий этап** | `ROADMAP.md`: R2 (остатки: проверка зависимостей, sudoers-генерация, `make install`) → R3 systemd --user + трей → R4 релизы/AUR → R5 тесты в CI |
+| **Известные косяки** | hp-wmi не отдаёт setpoint: `pwm*` на чтение ≈0.95× от записанного → статус показывает последнюю команду (by design, report §7); 18 неиспользуемых ключей `tui.*` в локалях; 17 удалённых мёртвых ключей больше не мешают (в локалях `unused=0`); навигация по пресетам только Tab/клик; в SVG-экспорте пропорции искажаются при жёстком `-w/-h`; `--delay` минимум 0.05; из меню запуск возможен только при наличии `foot`/`kitty` (иначе `notify-send`) |
+| **Последнее изменение** | 2026-09-30 23:35 +04 |
+
+---
+
+## Запись от 2026-09-30 23:35 (+04) — v1.1.1: SMART-автозапуск, плавность циклов, язык en
+
+### Что сделано
+
+1. **Плавность цветовых переходов** (согласована отдельно, 5 файлов).
+   `bin/tui/core.py`: константы `SAMPLES=64`, `MIN_SAMPLES=16`,
+   `LOOP_SECONDS=4.0`, `MIN_STEP_DELAY=0.05`, `WRITE_COST=0.004`; новая
+   `step_count(speed)` считает ступени под период, `delay_for_speed()` =
+   `(LOOP_SECONDS/SAMPLES)/speed` с зажимом `0.05..2.0`, `colors_for_state()`
+   строит петлю через `step_count` (60 ступеней при speed1). `bin/victus-kbd`:
+   `cycle` больше не читает EC на каждом шаге (чтение 93 мс — минус на шаг,
+   только при `VICTUS_LOG=debug`); `bin/victus_log.py`: `debug_enabled()`;
+   `bin/tui/kbd_tab.py`: опрос статуса 0.3 → 0.04 с; `bin/tui/slider.py`:
+   `FLOW_TICK=0.04`, `TICK=0.12`, шаг волны и лимит догона зависят от
+   скорости. Замер: чтение EC ~93 мс, запись 3–4 мс → потолок ~19 записей/с;
+   speed1 → 60 ступеней, петля **3.91 с** (номинал 4.00), speed5 → 16/0.84 с,
+   `|ΔRGB|` на переходе 91 → 27. Пол `--delay` остался 0.05 — это и есть
+   потолок EC, локали в `victus-kbd` не менялись.
+2. **SMART-автозапуск при старте TUI (только TUI-петля).**
+   `VertilTab._boot` после пробы прав поднимает `_want_restore`; первый
+   снапшот (тик разрешён и со скрытой вкладкой) → `_restore_mode(snap)`:
+   файла `state/fan_mode.json` нет или `smart` → `_start_autopilot` со
+   статусом `tui.vertil_smart_autostart` (первый запуск сохраняет `smart`);
+   `manual`/`auto` → возврат выбора, `set-mode` пишется **только** если
+   железо не в этом режиме. Выбор сохраняют `_to_manual`, `_to_smart`
+   (вкл → smart, выкл → manual), `_to_auto`, `_apply_pwm`. Режим читается
+   честно из снапшота, `hold 180` при закрытии не тронут.
+   `bin/tui/vertil_core.py`: `fan_mode_load()/fan_mode_save()`,
+   `FAN_MODES`, `FAN_MODE_FILE`.
+3. **TUI сам поднимает демон.** `VictusApp.on_mount` →
+   `core.ensure_daemon()` (раньше не вызывался: `spawn_daemon` зовёт только
+   `victus-tray`), лог: `daemon spawned` + успешный `ping`.
+4. **Локаль → en (us).** `i18n.DEFAULT_LANG = "en"`, `config/locale = en`,
+   обновлены `README.md`/`README.ru.md`/`START_DEVELOPMENT.md`; удалены
+   **17 мёртвых ключей** (150 → 133, `unused=0`, паритет ru/en ✓), добавлен
+   `tui.vertil_smart_autostart`.
+5. **`VERSION` → 1.1.1.** README EN/RU: ссылки релиза, раздел про
+   вентиляторы (автозапуск и память режима, плавность циклов, автозапуск
+   демона, статус live-валидации), `ROADMAP.md` (версия + строка `v1.1.1` в
+   контрольных точках), `START_DEVELOPMENT.md` §2.1/§5/§6.
+
+### Изменённые файлы
+
+`bin/tui/core.py`, `bin/tui/kbd_tab.py`, `bin/tui/slider.py`,
+`bin/tui/screens.py`, `bin/tui/vertil_core.py`, `bin/tui/vertil_tab.py`,
+`bin/victus-kbd`, `bin/victus_log.py`, `bin/i18n.py`,
+`locales/ru.json`, `locales/en.json`, `README.md`, `README.ru.md`,
+`ROADMAP.md`, `START_DEVELOPMENT.md`, `PROGRESS_LOG.md`, `VERSION`.
+
+### Проверки
+
+- `ast.parse` по всем `bin/**/*.py` + `victus-kbd`/`ColorMaker`/`victus-tray`
+  → OK; `locales/*.json` → OK; скан ключей: `unused=0`, `used-but-absent=[]`,
+  паритет `ru == en` ✓.
+- `/tmp/opencode/restore_test.py` — 7 сценариев `_restore_mode` + сохранение
+  выбора во всех действиях → **RESTORE TEST OK** (запись замокана, железо не
+  тронуто).
+- `/tmp/opencode/vertil_smoke.py` → **SMOKE OK** (вкладки, язык, locale
+  вернулся в `en`; смоук замокан на `call`/`ensure_daemon`/`fan_mode_file`).
+- Живой прогон `/tmp/opencode/real_autostart_test.py`: первый запуск →
+  `autopilot=True`, статус «SMART started automatically», кнопка SMART,
+  `state/fan_mode.json = smart`, `daemon ping=True`, при закрытии в логе
+  `hold pwm=180 (mode=1)`. Демон после теста остановлен (`victus_tui --stop`).
+
+### Костыли / нюансы / ошибки
+
+- Восстановление режима живёт в воркере `_tick`, а не в `_boot`: один
+  снапшот вместо двух и работает, даже когда вкладка скрыта; тики до
+  восстановления разрешены (`_want_restore`), чтобы не пропустить первый
+  тик. `_start_autopilot` получил параметр `status`.
+- `hp-wmi` не отдаёт setpoint: запись применяется с задержкой (~5 PWM за
+  0.35 с), а после отпуска EC возвращается к своему уровню (~171 при 48 °C) —
+  `hold 180` в логе проходит, но удержания после выхода процесса нет.
+  Известный эффект (отчёт §7), к v1.1.1 отношения не имеет.
+- Смоук и тесты шунтируют `vertil_core.call`, `core.ensure_daemon` и
+  `fan_mode_file` (иначе прогон пишет в EC и поднимает демон).
+- `state/fan_mode.json` не коммитится (`state/` в `.gitignore`).
+
+### Релиз
+
+Тег `v1.1.1` → GitHub Release (обычный): артефакт `victus-suite.tar.gz`
+(`git archive --format=tar.gz --prefix=victus-suite/`), notes EN + RU,
+README-ссылка `releases/download/v1.1.1/`. Тег и `main` запушены.
 
 ---
 
@@ -571,6 +657,11 @@ AST/JSON OK, смоук `SMOKE OK`.
 ---
 
 ## История (хронологически, новые вверху)
+
+### 2026-09-30 23:35 — v1.1.1: SMART-автозапуск + память режима, плавность
+циклов (64 ступени, петля 3.91 с), автозапуск демона из TUI, язык по
+умолчанию en (us), −17 мёртвых ключей локалей, `VERSION` 1.1.1. Смоук
+**SMOKE OK**, тест режимов **7/7**, живой прогон автозапуска ✅.
 
 ### 2026-09-29 20:31 — интеграция в меню приложений + ч/б иконка
 См. запись выше. `install.sh` генерирует `victus-suite.desktop`

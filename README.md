@@ -1,6 +1,6 @@
 # OMEN Gaming Hub for Linux
 
-**Version:** v1.1.0-beta · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
+**Version:** v1.1.1 · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
 
 > **English (primary)** · [Русская версия →](README.ru.md)
 
@@ -16,7 +16,7 @@ Local project folder: `~/Work/victus-suite` → GitHub `victus-suite`.
 stage 2 (TUI on Textual), stage 3 (effects and power profiles).
 Details — `START_DEVELOPMENT.md` §4.
 
-## Installation (v1.1.0-beta)
+## Installation (v1.1.1)
 
 **From a release (recommended):**
 
@@ -26,7 +26,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # TUI engine (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.0-beta/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.1/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # symlinks + menu entry
 ```
@@ -105,10 +105,10 @@ Changer 120 200 255          # arbitrary RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # your own name (english)
 Changer mycolor
-victus_tui                   # TUI (beta, v1.1.0-beta)
+victus_tui                   # TUI (v1.1.1)
 ```
 
-### TUI (v1.1.0-beta)
+### TUI (v1.1.1)
 
 ```bash
 victus_tui                   # launch (asks sudo on EC writes)
@@ -132,11 +132,15 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
   with a barely visible live wobble — the light never dims;
 - **smart permission probe** (`probe_access`): direct write / `sudo` / EC module
   missing — the hint matches what is actually broken;
-- **language button** in the title row: RU ↔ EN without restart.
+- **language button** in the title row: RU ↔ EN without restart;
+- **colour cycles are smooth**: up to 64 steps per loop keeping the same
+  loop period (4 s at speed 1) — the EC is written below its ~19 writes/s
+  ceiling, so the fade never stutters;
 
 The window lives in the background: `victusd` (unix socket
 `$XDG_RUNTIME_DIR/victus-suite-<uid>.sock`) keeps the effect running while the
-TUI is closed, `victus-tray` gives quick start/stop from the tray.
+TUI is closed, `victus-tray` gives quick start/stop from the tray. Launching
+the TUI starts the daemon too if it is not running yet (`ensure_daemon`).
 
 **Fixed since alpha:** mouse-draggable ASCII sliders (no text selection).
 
@@ -184,8 +188,13 @@ temperatures/RPM/PWM plus `nvidia-smi` (run in a worker thread — it can take
 | Mode | What it does | Notes |
 |---|---|---|
 | **Manual** | two sliders set PWM 0..255 (0–100 %) per fan, written 0.4 s after the last drag | entering Manual is safe (the driver snapshots the current RPM) |
-| **SMART** | autopilot: predictive controller, 1 s step, thresholds from `vertil/config/presets.json` | sliders lock, status shows `SMART ▸ pwm1/pwm2` |
+| **SMART** | autopilot: predictive controller, 1 s step, thresholds from `vertil/config/presets.json` | **starts on TUI launch** (first run) and is remembered, see below |
 | **BIOS Auto** | hands both fans back to firmware | needs a **second click within 30 s** — see below |
+
+The hardware mode is read honestly on every launch (one snapshot, then the
+UI follows it). **Your own choice survives a restart:** first launch starts
+SMART, afterwards the mode you picked (Manual / SMART / AUTO) is restored
+from `state/fan_mode.json` — nothing is reset behind your back.
 
 ### Safety
 
@@ -228,14 +237,14 @@ VertilTab (Textual, 1 s poll, all blocking calls in worker threads)
 - The same backend is usable without the TUI:
   `victus-kbd fans status | set-pwm A B | set-mode 0|1|2 | hold N`.
 
-**Status:** console pult + TUI tab are integrated and verified with a
-headless smoke suite; the passwordless write probe passes on this machine.
-**Final live-write validation from the tab is still pending** — checklist in
-`vertil/docs/2026-09-30-tui-integration-session.md` §7.
+**Status:** console pult + TUI tab are integrated, verified with a headless
+smoke suite and validated live on this machine: SMART starts from the tab,
+the chosen mode is restored on relaunch, closing the window holds 180 PWM
+(logs + `vertil/docs/2026-09-30-tui-integration-session.md` §7).
 
 ## Interface language (localization)
 
-Default is **Russian**. Messages live in `locales/<code>.json`,
+Default is **English (us)**. Messages live in `locales/<code>.json`,
 the current language is in `config/locale`.
 
 ```bash
@@ -277,7 +286,7 @@ victus-suite/
 ├── PROGRESS_LOG.md               ← context journal (status, time, next step)
 ├── ROADMAP.md                    ← next stage: script → installable app
 ├── TZ.md                         ← full technical specification
-├── VERSION                       ← 1.1.0-beta (single source of truth)
+├── VERSION                       ← 1.1.1 (single source of truth)
 ├── install.sh                    ← ./install.sh [--remove] → symlinks + menu entry + icons
 ├── share/
 │   └── icons/                    ← black&white icon: victus-suite.svg, hicolor PNGs, make_icon.py

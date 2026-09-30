@@ -292,7 +292,10 @@ class KbdTab(Vertical):
         self._mark_selected(selected)
         self._sync_controls()
         self._boot()
-        self._poll = self.set_interval(0.3, self._poll_status)
+        # опрос статуса: тик 0.04 с — быстрее самого короткого шага (0.05 с
+        # при speed≥1.25), поэтому волна не пропускает ступени; старые 0.3 с
+        # давали на экране «ступеньки» в 4-5 шагов и хвост волны
+        self._poll = self.set_interval(0.04, self._poll_status)
 
     @work(exclusive=True, group="boot")
     async def _boot(self):

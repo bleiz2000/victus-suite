@@ -1,6 +1,6 @@
 # ROADMAP.md — из скрипта в самостоятельное приложение
 
-**Текущая версия:** `1.1.0-beta` (см. `VERSION`) · **Цель этого документа:** `v1.0.0` stable.
+**Текущая версия:** `1.1.1` (см. `VERSION`) · **Цель этого документа:** `v1.0.0` stable.
 
 > **EN TL;DR:** the project works as a folder of scripts (`./install.sh` makes
 > symlinks). To become a real app it needs packaging (a Python package with
@@ -19,9 +19,9 @@
 | Установка | `./install.sh` кладёт симлинки в `~/.local/bin` |
 | Меню приложений | ✅ есть: `./install.sh` → `victus-suite.desktop` (`Victus Suite`) + ч/б иконка в `hicolor` |
 | Права | ручной sudoers (`/etc/sudoers.d/victus-suite`) или запрос пароля |
-| Фон | `victusd` (unix-сокет) + `victus-tray` (AyatanaAppIndicator3), стартуют из TUI вручную |
+| Фон | `victusd` (unix-сокет) + `victus-tray` (AyatanaAppIndicator3): TUI сам поднимает демон при открытии (`ensure_daemon`), трей — по желанию |
 | UI | `victus_tui` — Textual, окно 960×540 (`--window`) или терминал |
-| Дистрибуция | `git clone` либо артефакт GitHub Release `v1.1.0-beta` (`victus-suite.tar.gz`) |
+| Дистрибуция | `git clone` либо артефакт GitHub Release `v1.1.1` (`victus-suite.tar.gz`) |
 | Тесты | 6 смоук-сьютов в `/tmp/opencode/v2/` (не в репозитории), 186 проверок |
 
 Что это значит: приложение **работает**, но **не устанавливается само**, не
@@ -178,6 +178,7 @@ R1 путь к бинарям станет стабильным — меньше
 |---|---|---|
 | `v1.0.0-beta` | Bento-TUI 960×540, спокойный режим, динамическая амплитуда, умная проверка прав, демон + трей | ✅ зафиксировано этим коммитом |
 | `v1.1.0-beta` | вкладка TUI «Вентиляторы» (`vertil`): телеметрия, Manual/SMART/AUTO, запись без пароля через `victus-kbd fans` | ✅ зафиксировано этим коммитом |
+| `v1.1.1` | автозапуск SMART при открытии TUI + память выбранного режима (`state/fan_mode.json`), плавные цветовые циклы, поднят демон из TUI, язык по умолчанию en, чистка мёртвых ключей локалей | ✅ зафиксировано этим коммитом |
 | `v1.0.0-rc.1` | R1 + R2: пакет, установщик, `.desktop`, автозапуск | ⬜ |
 | `v1.0.0-rc.2` | R3 + R5: systemd --user, трей из коробки, CI | ⬜ |
 | `v1.0.0` | R4: GitHub Release + AUR, CHANGELOG | ⬜ |

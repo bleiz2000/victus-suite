@@ -11,6 +11,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Button
 
 from i18n import CONFIG_LOCALE, lang, t
+from tui import core
 from tui.kbd_tab import KbdTab
 from tui.vertil_tab import VertilTab
 
@@ -586,6 +587,11 @@ class VictusApp(App):
 
     def compose(self) -> ComposeResult:
         yield VictusScreen()
+
+    def on_mount(self):
+        # «фоновый демон + TUI» (docstring victus_tui): если victusd ещё нет —
+        # поднимаем, чтобы эффекты были онлайн и в фоне, как у трей
+        self.run_worker(core.ensure_daemon(), exclusive=True, group="daemon")
 
     def action_refresh(self):
         if self.active_tab == "vertil":

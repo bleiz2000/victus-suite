@@ -141,5 +141,15 @@ def log_debug(tool, msg):
     log("debug", tool, msg)
 
 
+def debug_enabled() -> bool:
+    """True, если debug-строки реально будут записаны.
+
+    Нужно там, где подготовка сообщения дорогая: чтение EC стоит ~90 мс
+    (фикс на каждый доступ к /sys/kernel/debug/ec/ec0/io), поэтому в цикле
+    подсветки его делаем только когда отладка реально включена.
+    """
+    return _threshold() <= LEVELS["debug"]
+
+
 def log_exception(tool, msg):
     log("error", tool, msg, exc=True)

@@ -125,6 +125,7 @@ class VertilTab(Vertical):
         self._last_step = time.monotonic()
         self._fail_count = 0
         self._emerg_shown = None
+        self._want_restore = False
 
     # --- композиция ---------------------------------------------------------
 
@@ -193,6 +194,9 @@ class VertilTab(Vertical):
         self._render_limits()
         if self._access in ("direct", "sudo"):
             self._set_status(t("tui.vertil_ready"))
+            # режим железа читаем из первого снапшота (_tick), не здесь:
+            # один снапшот вместо двух и честная картина на старте
+            self._want_restore = True
         elif self._access == "need-password":
             self._set_status(t("tui.vertil_need_sudo"), error=True)
         elif self._access in ("no-hwmon", "no-vertil"):
@@ -202,7 +206,8 @@ class VertilTab(Vertical):
 
     @work(exclusive=True, group="vertil-tick")
     async def _tick(self):
-        if not self.display and not self.autopilot:
+        # до восстановления режима читаем железо даже со скрытой вкладки
+        if not self.display and not self.autopilot and not self._want_restore:
             return
         snap = await asyncio.to_thread(vertil_core.snapshot)
         if snap is None:
@@ -210,9 +215,59 @@ class VertilTab(Vertical):
                 self._set_status(t("tui.vertil_read_failed"), error=True)
             return
         self._snap = snap
+        if self._want_restore:
+            self._want_restore = False
+            await self._restore_mode(snap)
         if self.autopilot:
             await self._smart_step(snap)
         self._paint(snap)
+
+    async def _restore_mode(self, snap: dict):
+        """Старт режима при открытии: первый запуск — SMART, дальше — свой выбор.
+
+        Выбор человека (Manual / SMART / AUTO) не сбрасывается: он лежит в
+        state/fan_mode.json, режим железа читается из снапшота честно.
+        """
+        choice = vertil_core.fan_mode_load()
+        hw = snap.get("mode_name")
+        if choice in (None, "smart"):
+            if self.autopilot:
+                return
+            ok = await self._start_autopilot(
+                snap, status=t("tui.vertil_smart_autostart"))
+            if ok and choice is None:
+                vertil_core.fan_mode_save("smart")
+            return
+        if choice == "manual":
+            if hw != "manual":
+                ok, msg = await vertil_core.call("set-mode", "1")
+                if not ok:
+                    self._note_access(msg)
+                    self._set_status(t("tui.vertil_write_failed", msg=msg), error=True)
+                    return
+                vertil_core.session["controlled"] = True
+            self._mode = "manual"
+            self._setpoint = [snap.get("pwm1"), snap.get("pwm2")]
+            self._target = list(self._setpoint)
+            self._set_sliders_enabled(True)
+            self._sync_mode_buttons()
+            self._set_status(t("tui.vertil_manual_on"))
+            return
+        # choice == "auto": уже в AUTO — только показываем, иначе пишем
+        # (переход глушит вентиляторы, но это режим, который выбрали сами)
+        if hw != "auto":
+            ok, msg = await vertil_core.call("set-mode", "2")
+            if not ok:
+                self._note_access(msg)
+                self._set_status(t("tui.vertil_write_failed", msg=msg), error=True)
+                return
+            vertil_core.session["controlled"] = True
+        self._mode = "auto"
+        self._setpoint = [None, None]
+        self._target = [None, None]
+        self._set_sliders_enabled(True)
+        self._sync_mode_buttons()
+        self._set_status(t("tui.vertil_auto_done"))
 
     # --- автопилот ----------------------------------------------------------
 
@@ -246,7 +301,8 @@ class VertilTab(Vertical):
         self._target = [p1, p2]
         self._set_status(action)
 
-    async def _start_autopilot(self, snap: dict | None = None) -> bool:
+    async def _start_autopilot(self, snap: dict | None = None,
+                               status: str | None = None) -> bool:
         ok, msg = await vertil_core.call("set-mode", "1")
         if not ok:
             self._note_access(msg)
@@ -264,7 +320,7 @@ class VertilTab(Vertical):
         self.autopilot = True
         self._set_sliders_enabled(False)
         self._sync_mode_buttons()
-        self._set_status(t("tui.vertil_smart_on"))
+        self._set_status(status or t("tui.vertil_smart_on"))
         return True
 
     async def _stop_autopilot(self, status: str | None = None, error: bool = False):
@@ -291,6 +347,7 @@ class VertilTab(Vertical):
         self._auto_armed = 0.0
         if self.autopilot:
             await self._stop_autopilot()
+        vertil_core.fan_mode_save("manual")
         # железо уже в manual — писать нечего, и не нужен sudo
         if (self._snap or {}).get("mode_name") == "manual":
             self._mode = "manual"
@@ -311,8 +368,11 @@ class VertilTab(Vertical):
         self._auto_armed = 0.0
         if self.autopilot:
             await self._stop_autopilot(status=t("tui.vertil_smart_off"))
+            vertil_core.fan_mode_save("manual")
             return
-        await self._start_autopilot(self._snap)
+        ok = await self._start_autopilot(self._snap)
+        if ok:
+            vertil_core.fan_mode_save("smart")
 
     async def _to_auto(self):
         now = time.monotonic()
@@ -328,6 +388,7 @@ class VertilTab(Vertical):
             self._note_access(msg)
             self._set_status(t("tui.vertil_write_failed", msg=msg), error=True)
             return
+        vertil_core.fan_mode_save("auto")
         self._mode = "auto"
         self._setpoint = [None, None]
         self._sync_mode_buttons()
@@ -344,6 +405,7 @@ class VertilTab(Vertical):
             self._set_status(t("tui.vertil_write_failed", msg=msg), error=True)
             return
         vertil_core.session["controlled"] = True
+        vertil_core.fan_mode_save("manual")
         # set_pwm сам заходит в MANUAL — индикатор режима обновляем сразу
         self._mode = "manual"
         self._setpoint = [p1, p2]

@@ -175,6 +175,9 @@ class SineWave(Widget):
     speed = reactive(1.0)
     phase = reactive(0.0)
 
+    FLOW_TICK = 0.04  # тик офлайн-потока, с (25 Гц — предел обновления UI)
+    TICK = 0.12       # тик физики волны: амплитуда/период/перелив
+
     def __init__(
         self,
         slots=None,
@@ -196,6 +199,7 @@ class SineWave(Widget):
         self.base = tuple(base)
         self.color_step = 0.0
         self._step_target = 0.0
+        self._flow_step = 0.0
         self.auto_flow = False
         self._calm = True
         self._energy = 0.0
@@ -265,13 +269,18 @@ class SineWave(Widget):
             return
         if self._flow is not None:
             self._flow.stop()
-        delay = self._core.delay_for_speed(self.speed)
-        self._flow = self.set_interval(delay, self._flow_tick)
+        # Тик фиксированный (UI дёргается не чаще 25 Гц), а доля петли за тик
+        # считается от её периода LOOP_SECONDS/speed — ровно так же, как
+        # период держит клавиатура (см. core.step_count): и офлайн-волна, и
+        # EC идут с одинаковым темпом при любой скорости.
+        sp = max(0.2, min(float(self.speed), 5.0))
+        self._flow_step = self.FLOW_TICK * sp / self._core.LOOP_SECONDS
+        self._flow = self.set_interval(self.FLOW_TICK, self._flow_tick)
 
     def _flow_tick(self) -> None:
         if not self.auto_flow:
             return
-        self.set_color_step(self._step_target + 1.0 / self._core.SAMPLES)
+        self.set_color_step(self._step_target + self._flow_step)
 
     def _gradient(self):
         return self._core.Gradient(self.slots, base=self.base)
@@ -282,7 +291,7 @@ class SineWave(Widget):
         return int(index * max(width - 1, 0) / max(self.slots_count - 1, 1))
 
     def on_mount(self):
-        self._timer = self.set_interval(0.12, self._tick)
+        self._timer = self.set_interval(self.TICK, self._tick)
         if self.auto_flow:
             self._start_flow()
 
@@ -309,10 +318,15 @@ class SineWave(Widget):
                 moved = True
         if moved:
             self.refresh()
-        # переливание: доезжаем к цели коротким путём, без рывков
+        # переливание: доезжаем к цели коротким путём, без рывков.
+        # Предел шага должна успевать за целью: цель идёт со скоростью
+        # speed/LOOP_SECONDS петли в секунду — при старом жёстком 0.04
+        # волна отставала уже на speed ≳ 1.3 и «прыгала» хвостом.
         if abs(((self._step_target - self.color_step) + 0.5) % 1.0 - 0.5) > 1e-6:
             d = (self._step_target - self.color_step + 0.5) % 1.0 - 0.5
-            self.color_step = (self.color_step + max(-0.04, min(0.04, d))) % 1.0
+            cap = max(0.04, 1.6 * self.TICK * max(self.speed, 0.2)
+                      / self._core.LOOP_SECONDS)
+            self.color_step = (self.color_step + max(-cap, min(cap, d))) % 1.0
             self.refresh()
         # фаза: в боевом режиме быстрее, в спокойном — тихий медленный ход
         rate = (0.06 + 0.16 * self._energy) * max(self.speed, 0.05)

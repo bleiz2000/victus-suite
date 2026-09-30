@@ -14,6 +14,7 @@ session — флаги, которые переживают пересборку
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -39,10 +40,41 @@ except Exception:  # noqa: BLE001 — каталог vertil/ может отсу
 
 session = {"controlled": False, "autopilot": False}
 
+# Выбор режима переживает перезапуск программы: файл ещё нет — первый запуск
+# (сразу SMART), дальше возвращаем то, что человек выбрал сам.
+FAN_MODES = ("smart", "manual", "auto")
+FAN_MODE_FILE = "fan_mode.json"
+
 _access = None
 _fans = None
 _sensors = None
 _busy_prev = None
+
+
+def fan_mode_file() -> str:
+    return os.path.join(vlog.state_dir(), FAN_MODE_FILE)
+
+
+def fan_mode_load() -> str | None:
+    """Последний выбранный режим: smart | manual | auto | None (не выбирали)."""
+    try:
+        with open(fan_mode_file(), encoding="utf-8") as f:
+            mode = json.load(f).get("mode")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return mode if mode in FAN_MODES else None
+
+
+def fan_mode_save(mode: str) -> None:
+    if mode not in FAN_MODES:
+        return
+    try:
+        os.makedirs(os.path.dirname(fan_mode_file()), exist_ok=True)
+        with open(fan_mode_file(), "w", encoding="utf-8") as f:
+            json.dump({"mode": mode}, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        vlog.log("warn", TOOL, f"fan mode save failed: {e}")
 
 
 def available() -> bool:

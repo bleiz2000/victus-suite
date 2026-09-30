@@ -31,7 +31,16 @@ QUICK = (
     "magenta", "yellow", "orange", "purple", "pink", "gray",
 )
 SLOTS = 4
-SAMPLES = 16
+# Ступени петли: до 64 (по 16 промежуточных цветов на переход между стопами;
+# раньше было 16 всего, т.е. по 4 — отсюда «резкое» переключение).
+# Сколько ступеней реально уйдёт в петлю — step_count(): EC принимает не
+# больше ~19 записей/с, поэтому на быстрых скоростях ступеней меньше, а
+# период петли (LOOP_SECONDS/speed) сохраняется во всех случаях.
+SAMPLES = 64          # максимум ступеней
+MIN_SAMPLES = 16      # минимум: не меньше старого поведения (16 × 0.05 с)
+LOOP_SECONDS = 4.0    # полная петля при speed=1 (не менялось: 16 × 0.25 с)
+MIN_STEP_DELAY = 0.05  # пауза не ниже: замер — при меньшей EC «догоняет»
+WRITE_COST = 0.004    # замер: запись в EC ≈ 2-4 мс при паузе ≥ 50 мс
 
 DEFAULTS = {
     "rgb": [255, 255, 255],
@@ -240,13 +249,35 @@ def apply_black_depth(rgb, bd) -> tuple:
 
 
 def delay_for_speed(speed: float) -> float:
-    """Секунды на один шаг петли от Effect Speed.
+    """Секунд на один шаг петли от Effect Speed.
 
     Направление то же, что у синусоиды (там rate *= speed): слайдер
     «Скорость» должен ускорять и волну, и клавиатуру одновременно.
+
+    Шаг считается от периода петли, а не задаётся числом:
+        delay = (LOOP_SECONDS / SAMPLES) / speed
+    т.е. при speed=1 это 0.0625 с на ступень. Пауза при этом не опускается
+    ниже MIN_STEP_DELAY (замер: при меньшей паузе запись в EC «догоняет» и
+    шаг растягивается до ~50-58 мс — теряем только в точности тайминга).
+    Число ступеней под период подбирает step_count().
     """
     sp = _clamp(_num(speed, 1.0), 0.2, 5.0)
-    return _clamp(0.25 / sp, 0.05, 2.0)
+    return _clamp((LOOP_SECONDS / SAMPLES) / sp, MIN_STEP_DELAY, 2.0)
+
+
+def step_count(speed: float, delay: float | None = None) -> int:
+    """Сколько ступеней влезает в петлю LOOP_SECONDS/speed.
+
+    Реальная ступень = пауза + запись в EC (WRITE_COST), поэтому
+        n = round((LOOP_SECONDS / speed) / (delay + WRITE_COST))
+    На speed ≤ 1 даёт все SAMPLES (64), на speed=5 — 16, т.е. ровно то,
+    что крутилось раньше: железо не быстрее, но и не медленнее.
+    """
+    sp = _clamp(_num(speed, 1.0), 0.2, 5.0)
+    d = delay_for_speed(sp) if delay is None else float(delay)
+    per = max(_num(d, MIN_STEP_DELAY), MIN_STEP_DELAY) + WRITE_COST
+    n = int(round((LOOP_SECONDS / sp) / per))
+    return int(_clamp(n, MIN_SAMPLES, SAMPLES))
 
 
 class Gradient:
@@ -368,12 +399,15 @@ def colors_for_state(state: dict) -> list:
     """Петля для режима: cycle = градиент стопов, fade = разгон до черного.
 
     На выходе — уже «глубина чёрного»: клавиатура получает финальный цвет.
+    Длина петли — step_count(speed): ступеней максимум, сколько влезает
+    в период LOOP_SECONDS/speed с учётом потолка EC.
     """
+    n = step_count(state.get("speed", 1.0))
     if state.get("effect") == "fade":
-        raw = fade_samples(state.get("rgb", (255, 255, 255)))
+        raw = fade_samples(state.get("rgb", (255, 255, 255)), n)
     else:
         grad = Gradient(state.get("stops"), base=state.get("rgb", (255, 255, 255)))
-        raw = grad.samples()
+        raw = grad.samples(n)
     bd = state.get("black_depth", 50)
     return [to_hex(apply_black_depth(c, bd)) for c in raw]
 
