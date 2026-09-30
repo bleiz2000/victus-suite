@@ -237,15 +237,23 @@ def hex_to_rgb(value):
 
 
 def apply_black_depth(rgb, bd) -> tuple:
-    """Насыщенность чёрного: gamma 0.5..1.5 (50 = нейтрально)."""
-    g = 0.5 + _clamp(int(bd), 0, 100) / 100.0
-    if abs(g - 1.0) < 1e-9:
-        return tuple(_clamp(int(c), 0, 255) for c in rgb)
-    out = []
-    for c in rgb:
-        base = _clamp(int(c), 0, 255) / 255.0
-        out.append(_clamp(round(255.0 * (base ** g)), 0, 255))
-    return tuple(out)
+    """Шкала «Чёрный — База — Белый»: 0 = чёрный, 50 = база, 100 = белый.
+
+    Плавный lerp к цели: t = |bd - 50| / 50. Правее середины базовый цвет
+    смешивается с белым, левее — с чёрным; ровно 50 возвращает цвет как есть.
+    Раньше тут была гамма 0.5..1.5, которая яркие цвета почти не затемняла
+    (см. сессию 2026-10-01 в PROGRESS_LOG).
+    """
+    s = _clamp(int(bd), 0, 100)
+    base = tuple(_clamp(int(c), 0, 255) for c in rgb)
+    if s == 50:
+        return base
+    t = abs(s - 50) / 50.0
+    target = (255, 255, 255) if s > 50 else (0, 0, 0)
+    return tuple(
+        _clamp(round(base[i] + (target[i] - base[i]) * t), 0, 255)
+        for i in range(3)
+    )
 
 
 def delay_for_speed(speed: float) -> float:

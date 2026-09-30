@@ -81,7 +81,7 @@ Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
 | `Changer cycle <colors> [--delay S]` | custom loop | asks sudo |
 | `Changer stop` | stop the loop | asks sudo |
-| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — Bento 960×540: presets, HSV, effects, **fans tab** | asks sudo |
+| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — RGB sliders + effects, **fans tab** | asks sudo |
 | `victusd [--verbose\|--quit]` | background daemon (unix socket, keeps effects alive) | no |
 | `victus-tray` | tray icon: open window / start-stop effect / quit | no |
 | `victus-report [--with-ec]` | diagnostics + logs into one file | no |
@@ -121,11 +121,15 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 `victus-kbd`, the palette comes from `victus_palette`, state is kept in
 `state/last_state.json`.
 
-- compact **Bento 960×540** layout: PRESETS / COLOR PICKER / LIGHTING EFFECTS;
-- power switch, 48 built-in presets + your own colors;
-- HSV sliders with live preview: `rgb() / #hex / hsv()`;
-- `Apply` · `Copy hex` · `Save as name`;
-- `Cycle`/`Fade`/`Solid` effects, `Start` / `Stop`, status line;
+- compact **Bento 960×540** layout: COLOR PICKER / LIGHTING EFFECTS;
+- four long ticked sliders — `Red`/`Green`/`Blue` (0…255) and `Shade`
+  (0…100: **0 = black, 50 = your color, 100 = white**), each with an exact
+  numeric box beside it: click it and type the value;
+- the `Hex` field previews **live while you type**; `Enter` (or `Apply`)
+  sends it to the keyboard, a broken hex only restores the field;
+- `Cycle`/`Fade`/`Static` modes, power switch and `Effect Speed`
+  (0.2…5.0, also typeable) sit in the same LIGHTING EFFECTS panel;
+- `Apply` · `Copy hex`, status line;
 - **wave speed follows Effect Speed**: amplitude and period are lerped toward
   the target every 0.12 s, no jumps;
 - **calm mode**: after `Stop` the sine flattens into a straight coloured line
@@ -298,7 +302,7 @@ victus-suite/
 │   tui/                          ← TUI modules
 │     core.py (EC/sudo probe, engine, delay_for_speed)
 │     screens.py (Bento layout, tabs, language button)
-│     kbd_tab.py (presets/picker/effects, kill_loop, calm)
+│     kbd_tab.py (color/effect panels, kill_loop, calm)
 │     vertil_tab.py (fans tab: telemetry, modes, SMART loop)
 │     vertil_core.py (read/write bridge, sudo -n probe, hold on exit)
 │     slider.py (ASCII sliders, SineWave)

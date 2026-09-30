@@ -1,26 +1,28 @@
-"""Вкладка «Подсветка» v2 — компактный Bento по новому ТЗ.
+"""Вкладка «Подсветка» v3 — минималистичный пульт по новому ТЗ.
 
-Слева  PRESETS            — быстрый список (12 базовых + свои цвета), «+ свой
-                             цвет», внизу блока переключатели режимов и питание.
-В центре COLOR PICKER      — HSV + RGB + Black Depth, поле HEX, внизу большое
-                             квадратное превью и кнопки Apply / Copy HEX / Save.
-Справа  LIGHTING EFFECTS   — Custom Effect Creator с живой синусоидой и
-                             интерактивными стопами «+», Effect Speed,
-                             Start / Stop.
+Слева  нет: колонка пресетов убрана, экран отдан полоскам (длиннее и удобнее).
+
+В центре COLOR PICKER      — ровно четыре полоски: R / G / B (0..255) и
+                             «Насыщенность» (0 = чёрный, 50 = базовый цвет,
+                             100 = белый). У каждой полоски — деления и поле
+                             с числом: кликнуть и вписать точное значение.
+                             Ниже — поле HEX (живое превью, Enter применяет
+                             цвет к клавиатуре), большое квадратное превью и
+                             кнопки Apply / Copy HEX.
+Справа  LIGHTING EFFECTS   — сверху режимы (Static/Cycle/Fade) и питание,
+                             ниже Custom Effect Creator с живой синусоидой,
+                             Effect Speed (тоже с полем числа) и Start / Stop.
 
 Вся запись на клавиатуру идёт через фоновый демон (bin/victusd) по unix-сокету;
 без демона TUI пишет напрямую через victus-kbd. Экран показывает ровно то, что
 ушло в EC: демон отдаёт k/steps — тем же шагом крутится и синусоида.
 """
 
-import asyncio
-import os
-
 from rich.cells import cell_len
 from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.content import Content
 from textual.reactive import reactive
 from textual.screen import ModalScreen
@@ -34,9 +36,6 @@ import victus_palette as pal
 from i18n import t
 
 TOOL = "victus_tui"
-_HERE = os.path.dirname(os.path.realpath(__file__))
-_BIN = os.path.dirname(_HERE)
-COLORMAKER = os.path.join(_BIN, "ColorMaker")
 
 EFFECT_IDS = {"effect-none": "none", "effect-cycle": "cycle", "effect-fade": "fade"}
 MODE_IDS = ("effect-none", "effect-cycle", "effect-fade")
@@ -47,7 +46,15 @@ MODE_NAMES = {
 }
 
 NAME_WIDTH = 10
-LABEL_WIDTH = 12
+
+# Числовые поля рядом с полосками: id полоски → (min, max, as_float)
+NUMBER_FIELDS = {
+    "r": (0, 255, False),
+    "g": (0, 255, False),
+    "b": (0, 255, False),
+    "black": (0, 100, False),
+    "speed": (0.2, 5.0, True),
+}
 
 
 class RowButton(Button):
@@ -76,47 +83,6 @@ def preset_label(name: str, rgb) -> Text:
     text.append("■", style=f"bold {core.to_hex(rgb)}")
     text.append("]", style="dim")
     return text
-
-
-class SavePresetScreen(ModalScreen):
-    """Диалог имени для [ Save Preset ] / «+ свой цвет»."""
-
-    BINDINGS = [("escape", "cancel", None)]
-
-    def __init__(self, hex_color: str):
-        super().__init__()
-        self.hex_color = hex_color
-
-    def compose(self) -> ComposeResult:
-        box = Vertical(id="save-box")
-        box.border_title = t("tui.save_title")
-        with box:
-            yield Static(Text(f"Hex: [{self.hex_color}]"), id="save-hex", classes="readout")
-            yield Input(placeholder=t("tui.name_placeholder"), id="name-input")
-            with Horizontal(id="save-actions"):
-                yield Button(Text(t("tui.btn_save")), id="save-ok")
-                yield Button(Text(t("tui.btn_cancel")), id="save-cancel")
-
-    def on_mount(self):
-        self.query_one("#name-input", Input).focus()
-
-    def _entered_name(self) -> str:
-        return self.query_one("#name-input", Input).value.strip().lower()
-
-    @on(Input.Submitted)
-    def submitted(self, event):
-        self.dismiss(self._entered_name() or None)
-
-    @on(Button.Pressed)
-    def pressed(self, event):
-        bid = event.button.id
-        if bid == "save-ok":
-            self.dismiss(self._entered_name() or None)
-        elif bid == "save-cancel":
-            self.dismiss(None)
-
-    def action_cancel(self):
-        self.dismiss(None)
 
 
 class PickColorScreen(ModalScreen):
@@ -190,21 +156,12 @@ class KbdTab(Vertical):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
-            yield from self._presets_panel()
             yield from self._color_panel()
             yield from self._effects_panel()
         with Horizontal(id="statusline"):
             with Horizontal(id="status-flow"):
                 yield Static("", id="color-tag")
                 yield Static("", id="status")
-
-    def _presets_panel(self):
-        panel = Vertical(classes="panel", id="presets-panel")
-        panel.border_title = t("tui.sec_presets")
-        with panel:
-            yield RowButton(Text(t("tui.add_color")), id="add-color", classes="add-row")
-            yield ScrollableContainer(id="preset-list")
-            yield from self._mode_block()
 
     def _mode_block(self):
         block = Vertical(id="mode-block")
@@ -219,16 +176,12 @@ class KbdTab(Vertical):
             with Horizontal(classes="mode-row", id="power-row"):
                 yield Label(t("tui.power"), classes="mode-label")
                 yield Switch(value=self.power, id="power")
-        return []
 
     def _color_panel(self):
         panel = Vertical(classes="panel", id="color-panel")
         panel.border_title = t("tui.sec_picker")
         with panel:
             with Vertical(id="picker-top"):
-                yield from self._value_row("hue", t("tui.lab_hue"), 0, 360)
-                yield from self._value_row("sat", t("tui.lab_sat"), 0, 100)
-                yield from self._value_row("val", t("tui.lab_val"), 0, 100)
                 yield from self._value_row("r", t("tui.lab_r"), 0, 255)
                 yield from self._value_row("g", t("tui.lab_g"), 0, 255)
                 yield from self._value_row("b", t("tui.lab_b"), 0, 255)
@@ -240,24 +193,35 @@ class KbdTab(Vertical):
                 yield Static("", id="preview")
                 with Vertical(id="bottom-right"):
                     with Vertical(id="readouts"):
-                        yield Static("RGB", id="read-rgb", classes="readout")
-                        yield Static("Hex", id="read-hex", classes="readout")
                         yield Static("", id="read-applied", classes="readout applied")
                     with Horizontal(id="picker-actions"):
                         yield Button(Text(t("tui.btn_apply")), id="apply")
                         yield Button(Text(t("tui.btn_copy_hex")), id="copy-hex")
-                        yield Button(Text(t("tui.btn_save_preset")), id="save-name")
 
     def _value_row(self, sid, label, lo, hi):
-        with Horizontal(classes="hsv-row", id=f"row-{sid}"):
-            yield Label(label, classes="hsv-label")
-            yield AsciiSlider(min=lo, max=hi, step=1, value=lo, id=sid)
-            yield Static(f"{lo}", id=f"{sid}-val", classes="hsv-value")
+        """Строка полоски: подпись, длинная полоска с делениями, поле числа.
+
+        Число в поле — точная настройка: кликнуть и вписать значение
+        (Enter или уход из поля), неверное число откатывается к прежнему.
+        """
+        start = {
+            "r": int(self.color[0]),
+            "g": int(self.color[1]),
+            "b": int(self.color[2]),
+            "black": int(self.black_depth),
+        }[sid]
+        with Horizontal(classes="slider-row", id=f"row-{sid}"):
+            yield Label(label, classes="slider-label")
+            yield AsciiSlider(min=lo, max=hi, step=1, value=start, id=sid, ticks=True)
+            yield Input(
+                value=str(start), id=f"{sid}-val", classes="num-input", type="integer"
+            )
 
     def _effects_panel(self):
         panel = Vertical(classes="panel", id="effects-panel")
         panel.border_title = t("tui.sec_effects")
         with panel:
+            yield from self._mode_block()
             creator = Vertical(id="creator")
             creator.border_title = t("tui.sec_creator")
             with creator:
@@ -265,11 +229,20 @@ class KbdTab(Vertical):
                     slots=self.stops, base=self.color, speed=self.speed, id="sine"
                 )
             with Horizontal(id="speed-row"):
-                yield Static(
-                    f"{t('tui.speed_label')} {self.speed:.1f}", id="speed-label"
-                )
+                yield Label(t("tui.speed_label"), id="speed-label")
                 yield AsciiSlider(
-                    min=0.2, max=5.0, step=0.1, value=self.speed, id="speed"
+                    min=0.2,
+                    max=5.0,
+                    step=0.1,
+                    value=self.speed,
+                    id="speed",
+                    ticks=True,
+                )
+                yield Input(
+                    value=f"{self.speed:.1f}",
+                    id="speed-val",
+                    classes="num-input",
+                    type="number",
                 )
             with Horizontal(id="effect-actions"):
                 yield Button(Text(t("tui.btn_start")), id="effect-start")
@@ -278,18 +251,6 @@ class KbdTab(Vertical):
     # --- старт -----------------------------------------------------------------
 
     def on_mount(self):
-        table = core.display_colors()
-        listing = self.query_one("#preset-list", ScrollableContainer)
-        names = list(table)
-        selected = None
-        for name in names:
-            rgb = table[name]
-            listing.mount(
-                RowButton(preset_label(name, rgb), id=f"c-{name}", classes="preset")
-            )
-            if rgb == self.color and selected is None:
-                selected = name
-        self._mark_selected(selected)
         self._sync_controls()
         self._boot()
         # опрос статуса: тик 0.04 с — быстрее самого короткого шага (0.05 с
@@ -373,21 +334,19 @@ class KbdTab(Vertical):
         st.update(Text(text))
         st.styles.color = "#ff6b6b" if error else "#7ee787"
 
-    def _mark_selected(self, name):
-        for btn in self.query(".preset"):
-            btn.set_class(name is not None and btn.id == f"c-{name}", "selected")
+    def _set_value_text(self, sid, text):
+        """Обновить число рядом с полоской, не мешая тому, кто в него печатает."""
+        field = self.query_one(f"#{sid}-val", Input)
+        if not field.has_focus:
+            field.value = str(text)
 
     def _sync_controls(self):
-        """Слайдеры, поле HEX и превью — по self.color / power / black_depth."""
+        """Полоски, числовые поля, HEX и превью — по color / black_depth."""
         if self._syncing:
             return
         self._syncing = True
         try:
-            h, s, v = pal.rgb_to_hsv(self.color)
             targets = {
-                "hue": round(h),
-                "sat": round(s * 100),
-                "val": round(v * 100),
                 "r": self.color[0],
                 "g": self.color[1],
                 "b": self.color[2],
@@ -395,7 +354,7 @@ class KbdTab(Vertical):
             }
             for sid, value in targets.items():
                 self.query_one(f"#{sid}", AsciiSlider).set_value(value)
-                self.query_one(f"#{sid}-val", Static).update(str(value))
+                self._set_value_text(sid, str(value))
             hex_input = self.query_one("#hex-input", Input)
             if not hex_input.has_focus:
                 hex_input.value = core.to_hex(self.color)
@@ -413,12 +372,9 @@ class KbdTab(Vertical):
         self.query_one("#color-tag", Static).update(t("tui.color_tag", hex=hexv))
 
     def _refresh_readout(self):
-        r, g, b = self.color
         raw = core.to_hex(self.color)
         applied = self._effective()
         applied_hex = core.to_hex(applied)
-        self.query_one("#read-rgb", Static).update(Text(f"RGB {r},{g},{b}"))
-        self.query_one("#read-hex", Static).update(Text(f"Hex {raw}"))
         extra = self.query_one("#read-applied", Static)
         if applied_hex != raw:
             extra.update(Text(f"→ {applied_hex}", style="bold #7ee787"))
@@ -426,14 +382,8 @@ class KbdTab(Vertical):
             extra.update(Text(""))
         self._refresh_preview(applied)
 
-    def _set_color(self, color, select: str | None = None):
+    def _set_color(self, color):
         self.color = tuple(core._norm_rgb(color, self.color))
-        if select is None:
-            table = core.display_colors()
-            select = next(
-                (n for n, v in table.items() if tuple(v) == tuple(self.color)), None
-            )
-        self._mark_selected(select)
         self._sync_controls()
         self._schedule_store()
 
@@ -454,15 +404,6 @@ class KbdTab(Vertical):
             return
         self._set_status(t("tui.applied", color=core.to_hex(color)))
         self._refresh_preview(color)
-
-    async def _select_preset(self, name):
-        rgb = pal.all_colors().get(name)
-        if rgb is None:
-            return
-        self.power = True
-        self.query_one("#power", Switch).value = True
-        self._set_color(rgb, select=name)
-        await self._apply_current()
 
     def _gradient_colors(self) -> list:
         return core.colors_for_state(self._state_payload())
@@ -501,14 +442,6 @@ class KbdTab(Vertical):
         await self._store_now()
 
     @work(exclusive=True)
-    async def _prompt_save(self):
-        result = await self.app.push_screen(
-            SavePresetScreen(core.to_hex(self.color)), wait_for_dismiss=True
-        )
-        if result:
-            await self._save_named_color(str(result))
-
-    @work(exclusive=True)
     async def _pick_stop(self, index: int):
         result = await self.app.push_screen(
             PickColorScreen(index, self.stops[index]), wait_for_dismiss=True
@@ -530,45 +463,6 @@ class KbdTab(Vertical):
         else:
             self._schedule_store()
 
-    async def _save_named_color(self, name):
-        if not pal.NAME_RE.match(name):
-            self._set_status(t("cm.name_rule"), error=True)
-            return
-        proc = await asyncio.create_subprocess_exec(
-            COLORMAKER,
-            "add",
-            name,
-            core.to_hex(self.color),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, err = await proc.communicate()
-        if proc.returncode != 0:
-            self._set_status(
-                err.decode().strip() or t("tui.apply_failed", rc=proc.returncode),
-                error=True,
-            )
-            return
-        self._set_status(out.decode().strip() or t("tui.saved"))
-        vlog.log_info(TOOL, f"saved color {name}={self.color}")
-        self._refresh_presets()
-
-    def _refresh_presets(self):
-        listing = self.query_one("#preset-list", ScrollableContainer)
-        table = core.display_colors()
-        names = list(table)
-        for btn in list(listing.query(".preset")):
-            btn.remove()
-        selected = None
-        for name in names:
-            rgb = table[name]
-            listing.mount(
-                RowButton(preset_label(name, rgb), id=f"c-{name}", classes="preset")
-            )
-            if tuple(rgb) == tuple(self.color) and selected is None:
-                selected = name
-        self._mark_selected(selected)
-
     # --- события ----------------------------------------------------------------
 
     @on(AsciiSlider.Changed)
@@ -576,31 +470,22 @@ class KbdTab(Vertical):
         if self._syncing:
             return
         sid = event.slider.id
-        value = round(event.value)
         if sid == "black":
-            self.black_depth = value
-            self.query_one("#black-val", Static).update(str(value))
-            self._refresh_readout()
+            self.black_depth = round(event.value)
+            self._sync_controls()  # поле числа, превью и «→» применённый цвет
             self._schedule_store()
             if self.running:
                 self.run_worker(self._store_now(), exclusive=False)
             return
         if sid == "speed":
             self.speed = round(event.value, 1)
-            self.query_one("#speed-label", Static).update(
-                f"{t('tui.speed_label')} {self.speed:.1f}"
-            )
+            self._set_value_text("speed", f"{self.speed:.1f}")
             self.query_one("#sine", SineWave).speed = self.speed
             self._schedule_store()
             if self.running:
                 self.run_worker(self._store_now(), exclusive=False)
             return
-        if sid in ("hue", "sat", "val"):
-            hue = self.query_one("#hue", AsciiSlider).value
-            sat = self.query_one("#sat", AsciiSlider).value / 100.0
-            val = self.query_one("#val", AsciiSlider).value / 100.0
-            self._set_color(pal.hsv_to_rgb(hue, sat, val))
-        elif sid in ("r", "g", "b"):
+        if sid in ("r", "g", "b"):
             rgb = [
                 self.query_one(f"#{k}", AsciiSlider).value for k in ("r", "g", "b")
             ]
@@ -610,16 +495,97 @@ class KbdTab(Vertical):
     def stop_clicked(self, event):
         self._pick_stop(event.index)
 
-    @on(Input.Submitted)
-    def input_submitted(self, event):
+    # --- ввод: HEX и точные числа ---------------------------------------------
+
+    @on(Input.Changed)
+    def input_changed(self, event):
+        """Живое превью HEX: валидный цвет в поле сразу виден в квадрате.
+
+        Клавиатуру не трогаем — применение только по Enter/кнопке Apply.
+        """
         if event.input.id != "hex-input":
             return
         rgb = core.hex_to_rgb(event.value)
-        if rgb is None:
-            self._set_status(t("tui.bad_hex", value=event.value), error=True)
+        if rgb is None or tuple(rgb) == tuple(self.color):
             return
         self._set_color(rgb)
-        self.run_worker(self._apply_current(), exclusive=True)
+
+    @on(Input.Submitted)
+    def input_submitted(self, event):
+        eid = event.input.id or ""
+        if eid == "hex-input":
+            rgb = core.hex_to_rgb(event.value)
+            if rgb is None:
+                self._set_status(t("tui.bad_hex", value=event.value), error=True)
+                return
+            self._set_color(rgb)
+            self.run_worker(self._apply_current(), exclusive=True)
+        elif eid.endswith("-val"):
+            self._commit_number(event.input)
+
+    @on(Input.Blurred)
+    def input_blurred(self, event):
+        """Уход из поля: число применяется, мусор в HEX откатывается."""
+        eid = event.input.id or ""
+        if eid == "hex-input":
+            if core.hex_to_rgb(event.input.value) is None:
+                event.input.value = core.to_hex(self.color)
+        elif eid.endswith("-val"):
+            self._commit_number(event.input)
+
+    def _current_number(self, sid: str) -> str:
+        """Текущее значение поля по id полоски (для отката и сравнений)."""
+        if sid == "speed":
+            return f"{self.speed:.1f}"
+        if sid == "black":
+            return str(int(self.black_depth))
+        return str(int(self.color[{"r": 0, "g": 1, "b": 2}[sid]]))
+
+    def _commit_number(self, field: Input):
+        """Точная настройка: число из поля двигает полоску, как ползунок.
+
+        Нечисло — красный статус и откат к прежнему значению; выход за
+        диапазон зажимается в границы полоски. Повтор (Submit, потом
+        Blurred) не пишет состояние второй раз.
+        """
+        sid = (field.id or "").removesuffix("-val")
+        spec = NUMBER_FIELDS.get(sid)
+        if spec is None:
+            return
+        lo, hi, as_float = spec
+        raw = str(field.value).strip().replace(",", ".")
+        try:
+            number = float(raw) if as_float else int(raw)
+        except ValueError:
+            number = None
+        if number is None:
+            self._set_status(t("tui.bad_number", value=field.value), error=True)
+            field.value = self._current_number(sid)
+            return
+        number = min(hi, max(lo, number))
+        text = f"{number:.1f}" if as_float else str(int(number))
+        if text == self._current_number(sid):
+            if field.value != text:
+                field.value = text
+            return
+        field.value = text
+        if as_float:
+            self.speed = float(text)
+            self.query_one("#sine", SineWave).speed = self.speed
+            self._schedule_store()
+            if self.running:
+                self.run_worker(self._store_now(), exclusive=False)
+            return
+        if sid == "black":
+            self.black_depth = int(text)
+            self._sync_controls()
+            self._schedule_store()
+            if self.running:
+                self.run_worker(self._store_now(), exclusive=False)
+            return
+        rgb = list(self.color)
+        rgb[{"r": 0, "g": 1, "b": 2}[sid]] = int(text)
+        self._set_color(rgb)
 
     @work(exclusive=True)
     async def _power_changed(self, on: bool):
@@ -650,8 +616,6 @@ class KbdTab(Vertical):
         bid = event.button.id or ""
         if bid in EFFECT_IDS:
             self._set_effect(bid)
-        elif bid.startswith("c-"):
-            await self._select_preset(bid[2:])
         elif bid == "apply":
             await self._apply_current()
         elif bid == "effect-start":
@@ -666,8 +630,6 @@ class KbdTab(Vertical):
             except Exception as e:  # noqa: BLE001
                 vlog.log("warn", TOOL, f"clipboard failed: {e}")
                 self._set_status(hexv)
-        elif bid == "save-name" or bid == "add-color":
-            self._prompt_save()
 
     def on_unmount(self):
         if self._push_timer is not None:

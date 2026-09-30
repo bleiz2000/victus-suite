@@ -4,6 +4,8 @@
 
 AsciiSlider  `[======== ]`  — клик/драг мышью, колесо, ← →, Home/End.
              ALLOW_SELECT=False: клик двигает ползунок, а не выделяет текст.
+             ticks=True — вторая строка с делениями (риски каждые 10% и
+             подписи краёв/середины): видно, куда ведёт ползунок.
 
 SineWave     сглаженная синусоида (9 подуровней высоты внутри ячейки),
              живая анимация, скорость = Effect Speed.
@@ -21,7 +23,11 @@ RAMP = ("▔", "▇", "▆", "▅", "▄", "▃", "▂", "▁")
 
 
 class AsciiSlider(Widget):
-    """Полоса `[==== ]`: значение 0..max, ширина = доступное место."""
+    """Полоса `[==== ]`: значение 0..max, ширина = доступное место.
+
+    ticks=True рисует вторую строку — линейку с делениями каждые 10%
+    и подписями min/середина/max; такая полоска занимает 2 строки (CSS).
+    """
 
     class Changed(Message):
         def __init__(self, slider: "AsciiSlider", value: float) -> None:
@@ -49,6 +55,7 @@ class AsciiSlider(Widget):
         value: float = 0.0,
         unit: str = "",
         *,
+        ticks: bool = False,
         id: str | None = None,
         classes: str | None = None,
     ):
@@ -57,6 +64,7 @@ class AsciiSlider(Widget):
         self.max = float(max)
         self.step = float(step) or 1.0
         self.unit = unit
+        self.ticks = bool(ticks)
         self._drag = False
         self.value = self._clamp(self._quantize(value))
 
@@ -87,10 +95,54 @@ class AsciiSlider(Widget):
         filled = max(0, min(inner, round(self.fraction * inner)))
         text = Text()
         text.append("[", style="dim")
-        text.append("=" * filled, style="bold")
-        text.append(" " * (inner - filled))
+        if self.ticks:
+            text.append("█" * filled, style="bold")
+            text.append("░" * (inner - filled))
+        else:
+            text.append("=" * filled, style="bold")
+            text.append(" " * (inner - filled))
         text.append("]", style="dim")
+        if self.ticks:
+            text.append("\n")
+            text.append("[", style="dim")
+            for ch, style in self._ruler_cells(inner):
+                text.append(ch, style=style or "")
+            text.append("]", style="dim")
         return text
+
+    def _tick_labels(self) -> tuple:
+        """Подписи min / середина / максимум для линейки делений."""
+        lo, hi = self.min, self.max
+        mid = (lo + hi) / 2.0
+        if abs(lo - round(lo)) < 1e-9 and abs(hi - round(hi)) < 1e-9:
+            return str(int(round(lo))), str(int(round(mid))), str(int(round(hi)))
+        return f"{lo:.1f}", f"{mid:.1f}", f"{hi:.1f}"
+
+    def _ruler_cells(self, inner: int) -> list:
+        """Строка линейки: риски каждые 10% + подписи min/середина/max.
+
+        Числа пишутся поверх рисок; если ширины не хватает — остаются
+        только риски (узкое окно не должно ломать отрисовку).
+        """
+        cells = [(" ", None)] * max(inner, 0)
+        if inner <= 0:
+            return cells
+        for i in range(11):
+            x = round(i * (inner - 1) / 10) if inner > 1 else 0
+            cells[x] = ("│", "dim")
+        left, mid, right = self._tick_labels()
+        if inner < len(left) + len(mid) + len(right) + 2:
+            return cells
+        for i, ch in enumerate(left):
+            cells[i] = (ch, "dim")
+        right_start = inner - len(right)
+        for i, ch in enumerate(right):
+            cells[right_start + i] = (ch, "dim")
+        mid_start = (inner - len(mid)) // 2
+        if mid_start >= len(left) and mid_start + len(mid) <= right_start:
+            for i, ch in enumerate(mid):
+                cells[mid_start + i] = (ch, "dim")
+        return cells
 
     def _set_from_x(self, x: int):
         if self.max <= self.min:

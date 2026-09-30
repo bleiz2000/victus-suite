@@ -118,73 +118,18 @@ class VictusApp(App):
         border-title-align: center;
         background: #0b0b0b;
     }
-    #presets-panel { width: 22; }
     #color-panel { width: 1fr; }
     #effects-panel { width: 34; }
     #vtelemetry { width: 46; }
     #vcontrol { width: 1fr; }
     #vlimits { width: 32; }
 
-    /* ---- PRESETS ---- */
-    .add-row {
-        width: 100%;
-        min-width: 0;
-        height: 1;
-        padding: 0;
-        margin: 0 0 1 0;
-        border: none;
-        background: transparent;
-        color: #7ee787;
-        text-align: left;
-        content-align: left middle;
-    }
-    .add-row:hover {
-        background: #14200f;
-        color: #b6ffbc;
-    }
-    #preset-list {
-        width: 100%;
-        height: 1fr;
-        padding: 0;
-        scrollbar-color: #6a6a6a;
-        scrollbar-color-hover: #8a8a8a;
-        scrollbar-color-active: #a0a0a0;
-        scrollbar-background: #141414;
-        scrollbar-background-hover: #1c1c1c;
-        scrollbar-background-active: #0b0b0b;
-    }
-    #shell .preset {
-        width: 100%;
-        min-width: 0;
-        height: 1;
-        padding: 0;
-        border: none;
-        background: #0b0b0b;
-        color: #c4c4c4;
-        text-align: left;
-        content-align: left middle;
-    }
-    #shell .preset:hover {
-        background: #1e1e1e;
-        color: #ffffff;
-    }
-    #shell .preset:focus {
-        background: #1e1e1e;
-        color: #ffffff;
-        text-style: bold;
-    }
-    #shell .preset.selected {
-        background: #e8e8e8;
-        color: #000000;
-        text-style: bold;
-    }
     #mode-block {
         width: 100%;
         height: auto;
-        dock: bottom;
-        margin-top: 1;
-        padding-top: 1;
-        border-top: solid #3a3a3a;
+        margin-bottom: 1;
+        padding-bottom: 1;
+        border-bottom: solid #3a3a3a;
     }
     #mode-block Button.mode {
         width: 100%;
@@ -242,27 +187,33 @@ class VictusApp(App):
         align: left top;
         padding-top: 1;
     }
-    .hsv-row {
+    .slider-row {
         width: 100%;
-        height: 1;
+        height: 2;
         align: left middle;
     }
-    .hsv-label {
+    .slider-label {
         width: 16;
         height: 1;
         text-align: left;
         color: #c4c4c4;
     }
-    .hsv-row AsciiSlider {
+    .slider-row AsciiSlider {
         width: 1fr;
         min-width: 6;
-        height: 1;
+        height: 2;
     }
-    .hsv-value {
-        width: 4;
+    .num-input {
+        width: 6;
         height: 1;
-        text-align: right;
-        color: #9a9a9a;
+        padding: 0 1;
+        border: none;
+        background: #171717;
+        color: #e8e8e8;
+    }
+    .num-input:focus {
+        background: #222222;
+        color: #ffffff;
     }
     #hex-row {
         width: 100%;
@@ -320,8 +271,7 @@ class VictusApp(App):
         align: left middle;
     }
     #picker-actions Button,
-    #effect-actions Button,
-    #save-actions Button {
+    #effect-actions Button {
         width: auto;
         min-width: 0;
         height: 3;
@@ -335,8 +285,7 @@ class VictusApp(App):
         content-align: center middle;
     }
     #picker-actions Button:hover,
-    #effect-actions Button:hover,
-    #save-actions Button:hover {
+    #effect-actions Button:hover {
         background: #2e2e2e;
         color: #ffffff;
     }
@@ -360,7 +309,7 @@ class VictusApp(App):
     }
     #speed-row {
         width: 100%;
-        height: 1;
+        height: 2;
         margin-top: 1;
         align: left middle;
     }
@@ -373,7 +322,7 @@ class VictusApp(App):
     #speed-row AsciiSlider {
         width: 1fr;
         min-width: 6;
-        height: 1;
+        height: 2;
     }
     #effect-actions {
         width: 100%;
@@ -508,34 +457,9 @@ class VictusApp(App):
     }
 
     /* ---- modals ---- */
-    SavePresetScreen, PickColorScreen {
+    PickColorScreen {
         align: center middle;
         background: #000000 70%;
-    }
-    #save-box {
-        width: 64;
-        height: auto;
-        padding: 1 2;
-        border: solid #6a6a6a;
-        border-title-color: #e8e8e8;
-        border-title-style: bold;
-        border-title-align: center;
-        background: #101010;
-    }
-    #save-hex {
-        width: 100%;
-        height: 1;
-    }
-    #name-input {
-        width: 100%;
-        height: 3;
-        margin-top: 1;
-    }
-    #save-actions {
-        width: 100%;
-        height: 3;
-        margin-top: 1;
-        align: left middle;
     }
     #pick-box {
         width: 44;
