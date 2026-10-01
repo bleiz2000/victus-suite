@@ -1,11 +1,14 @@
 """Вкладка «vertil» — мониторинг и управление вентиляторами HP Victus.
 
-Слева  ТЕЛЕМЕТРИЯ    — CPU / GPU / VRM* (ACPI-прокси), обороты правого и
-                       левого вентилятора, duty PWM, режим hwmon.
-В центре УПРАВЛЕНИЕ  — режимы [Manual | SMART | BIOS Auto] и два слайдера
-                       PWM 0..255 (~RPM): правый = CPU (pwm1/fan1),
-                       левый = GPU (pwm2/fan2).
-Справа  БЕЗОПАСНОСТЬ — пороги guard/smart/авария из presets.json + доступ.
+Стиль — тот же, что у вкладки «Подсветка»: слева главная панель УПРАВЛЕНИЕ
+(режимы сверху с линейкой-разделителем, ниже две «крутилки» в формате
+полоски с делениями + поле точного числа), справа узкая колонка из двух
+панелей — ТЕЛЕМЕТРИЯ и БЕЗОПАСНОСТЬ.
+
+Крутилки: `Right fan` / `Left fan` — PWM 0..255 (правый = CPU, pwm1/fan1,
+левый = GPU, pwm2/fan2), у каждой деления, клик/драг/колесо и поле, куда
+можно вписать точный PWM (Enter или уход из поля, как у числовых полей
+цвета). Число пишется в железо с откладкой 0.4 с после последнего шага.
 
 Чтение — fanlib.Sensors (без root), запись — fanctl подкомандой
 `sudo -n bin/victus-kbd fans …` (NOPASSWD-правило подсветки, без пароля).
@@ -25,7 +28,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.content import Content
 from textual.reactive import reactive
-from textual.widgets import Button, Label, Static
+from textual.widgets import Button, Input, Label, Static
 
 from tui import vertil_core
 from tui.kbd_tab import RowButton
@@ -39,6 +42,8 @@ TOOL = "vertil"
 MODE_ORDER = ("manual", "smart", "auto")
 MODE_IDS = {"manual": "v-mode-manual", "smart": "v-mode-smart", "auto": "v-mode-auto"}
 SLIDER_IDS = ("v-pwm-cpu", "v-pwm-gpu")
+# Числовые поля рядом с крутилками: id полоски → (min, max)
+NUMBER_FIELDS = {"v-pwm-cpu": (0, 255), "v-pwm-gpu": (0, 255)}
 AUTO_CONFIRM_S = 30.0
 FAIL_STOP = 10
 
@@ -131,22 +136,14 @@ class VertilTab(Vertical):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="vbody"):
-            yield from self._telemetry_panel()
             yield from self._control_panel()
-            yield from self._limits_panel()
+            with Vertical(id="vside"):
+                yield from self._telemetry_panel()
+                yield from self._limits_panel()
         with Horizontal(id="vstatusline"):
             with Horizontal(id="vstatus-flow"):
                 yield Static("", id="vstatus-tag")
                 yield Static("", id="vstatus")
-
-    def _telemetry_panel(self):
-        panel = Vertical(classes="panel", id="vtelemetry")
-        panel.border_title = t("tui.sec_telemetry")
-        with panel:
-            yield Static("", id="v-temps", classes="vblock")
-            yield Static("", id="v-fans", classes="vblock")
-            yield Static("", id="v-mode-info", classes="vblock")
-        return []
 
     def _control_panel(self):
         panel = Vertical(classes="panel", id="vcontrol")
@@ -160,16 +157,32 @@ class VertilTab(Vertical):
                         id=MODE_IDS[kind],
                         classes=f"mode{' on' if kind == 'manual' else ''}",
                     )
-            with Horizontal(classes="vrow", id="v-row-cpu"):
+            with Vertical(id="v-knobs"):
                 # панель УПРАВЛЕНИЕ всегда по-английски (пожелание пользователя),
                 # телеметрия остаётся на языке интерфейса
-                yield Label("Right fan", classes="vlabel")
-                yield AsciiSlider(min=0, max=255, step=1, value=0, id="v-pwm-cpu")
-                yield Static("-", id="v-pwm-cpu-val", classes="vvalue")
-            with Horizontal(classes="vrow", id="v-row-gpu"):
-                yield Label("Left fan", classes="vlabel")
-                yield AsciiSlider(min=0, max=255, step=1, value=0, id="v-pwm-gpu")
-                yield Static("-", id="v-pwm-gpu-val", classes="vvalue")
+                yield from self._value_row("v-pwm-cpu", "Right fan")
+                yield from self._value_row("v-pwm-gpu", "Left fan")
+            with Vertical(id="v-readouts"):
+                # что получится, если оставить как есть: цель и оценка оборотов
+                yield Static("", id="v-target", classes="readout")
+                yield Static("", id="v-est", classes="readout")
+        return []
+
+    def _value_row(self, sid: str, label: str):
+        """Строка крутилки — тот же формат, что у вкладки «Подсветка»:
+        подпись, полоска с делениями и поле с точным PWM."""
+        with Horizontal(classes="slider-row", id=f"row-{sid}"):
+            yield Label(label, classes="slider-label")
+            yield AsciiSlider(min=0, max=255, step=1, value=0, id=sid, ticks=True)
+            yield Input(value="0", id=f"{sid}-val", classes="num-input", type="integer")
+
+    def _telemetry_panel(self):
+        panel = Vertical(classes="panel", id="vtelemetry")
+        panel.border_title = t("tui.sec_telemetry")
+        with panel:
+            yield Static("", id="v-temps", classes="vblock")
+            yield Static("", id="v-fans", classes="vblock")
+            yield Static("", id="v-mode-info", classes="vblock")
         return []
 
     def _limits_panel(self):
@@ -485,12 +498,6 @@ class VertilTab(Vertical):
                 (" ", ""), (duty.rjust(4), "cyan"),
             ))
             out.append("\n")
-        out.append_text(line(
-            (t("tui.vertil_target").ljust(6), "dim"),
-            ("%s/%s" % (self._setpoint[0] if self._setpoint[0] is not None else "-",
-                        self._setpoint[1] if self._setpoint[1] is not None else "-"),
-             "bold cyan"),
-        ))
         return out
 
     def _mode_text(self, snap: dict) -> Text:
@@ -616,18 +623,32 @@ class VertilTab(Vertical):
                     continue
                 slider = self.query_one("#%s" % sid, AsciiSlider)
                 slider.set_value(value)
-                self._set_val_label(sid, int(value))
+                self._set_value_text(sid, int(value))
+            self._render_readouts()
         finally:
             self._syncing = False
 
-    def _set_val_label(self, sid: str, value: int):
-        self.query_one("#%s-val" % sid, Static).update(
-            "%d ~%s RPM" % (value, est_rpm(value))
-        )
+    def _set_value_text(self, sid: str, value):
+        """Число в поле рядом с крутилкой — не мешаем тому, кто в него печатает."""
+        field = self.query_one("#%s-val" % sid, Input)
+        if not field.has_focus:
+            field.value = str(int(value))
+
+    def _render_readouts(self):
+        """Цель PWM и оценка оборотов под крутилками (как «→ hex» у цвета)."""
+        values = [int(self.query_one("#%s" % sid, AsciiSlider).value)
+                  for sid in SLIDER_IDS]
+        self.query_one("#v-target", Static).update(Text(
+            "%s %s/%s" % (t("tui.vertil_target"), values[0], values[1]),
+            style="bold cyan"))
+        self.query_one("#v-est", Static).update(Text(
+            "~%s / %s RPM" % (est_rpm(values[0]), est_rpm(values[1])),
+            style="dim"))
 
     def _set_sliders_enabled(self, enabled: bool):
         for sid in SLIDER_IDS:
             self.query_one("#%s" % sid, AsciiSlider).disabled = not enabled
+            self.query_one("#%s-val" % sid, Input).disabled = not enabled
 
     # --- события ------------------------------------------------------------
 
@@ -640,14 +661,59 @@ class VertilTab(Vertical):
         p1 = int(self.query_one("#v-pwm-cpu", AsciiSlider).value)
         p2 = int(self.query_one("#v-pwm-gpu", AsciiSlider).value)
         self._target = [p1, p2]
-        self._set_val_label("v-pwm-cpu", p1)
-        self._set_val_label("v-pwm-gpu", p2)
+        self._set_value_text("v-pwm-cpu", p1)
+        self._set_value_text("v-pwm-gpu", p2)
+        self._render_readouts()
         if self._pwm_timer is not None:
             self._pwm_timer.stop()
         self._pwm_timer = self.set_timer(
             0.4, lambda: self.run_worker(self._apply_pwm(p1, p2), exclusive=True,
                                          group="vertil-write")
         )
+
+    @on(Input.Submitted)
+    def input_submitted(self, event):
+        if (event.input.id or "").endswith("-val"):
+            self._commit_number(event.input)
+
+    @on(Input.Blurred)
+    def input_blurred(self, event):
+        if (event.input.id or "").endswith("-val"):
+            self._commit_number(event.input)
+
+    def _current_number(self, sid: str) -> str:
+        return str(int(self.query_one("#%s" % sid, AsciiSlider).value))
+
+    def _commit_number(self, field: Input):
+        """Точная настройка: число из поля двигает крутилку, как ползунок.
+
+        Нечисло — красный статус и откат к прежнему значению; выход за
+        диапазон зажимается в границы (0..255). Запись в железо уходит той
+        же откладкой 0.4 с, что и при драге. Повтор (Submit, потом Blurred)
+        не пишет PWM второй раз.
+        """
+        sid = (field.id or "").removesuffix("-val")
+        spec = NUMBER_FIELDS.get(sid)
+        if spec is None:
+            return
+        lo, hi = spec
+        raw = str(field.value).strip().replace(",", ".")
+        try:
+            number = int(raw)
+        except ValueError:
+            number = None
+        if number is None:
+            self._set_status(t("tui.bad_number", value=field.value), error=True)
+            field.value = self._current_number(sid)
+            return
+        number = min(hi, max(lo, number))
+        text = str(int(number))
+        if text == self._current_number(sid):
+            if field.value != text:
+                field.value = text
+            return
+        field.value = text
+        self.query_one("#%s" % sid, AsciiSlider).set_value(int(text), notify=True)
 
     @on(Button.Pressed)
     def button_pressed(self, event):

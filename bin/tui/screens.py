@@ -120,9 +120,10 @@ class VictusApp(App):
     }
     #color-panel { width: 1fr; }
     #effects-panel { width: 34; }
-    #vtelemetry { width: 46; }
     #vcontrol { width: 1fr; }
-    #vlimits { width: 32; }
+    #vside { width: 42; height: 100%; }
+    #vtelemetry { width: 100%; height: 1fr; }
+    #vlimits { width: 100%; height: auto; }
 
     #mode-block {
         width: 100%;
@@ -365,9 +366,9 @@ class VictusApp(App):
     #v-mode-block {
         width: 100%;
         height: auto;
-        margin-top: 1;
-        padding-top: 1;
-        border-top: solid #3a3a3a;
+        margin-bottom: 1;
+        padding-bottom: 1;
+        border-bottom: solid #3a3a3a;
     }
     #v-mode-block Button.mode {
         width: 100%;
@@ -389,27 +390,22 @@ class VictusApp(App):
         color: #ffffff;
         text-style: bold;
     }
-    .vrow {
+    #v-knobs {
         width: 100%;
-        height: 1;
+        height: 1fr;
+        align: left top;
+    }
+    #v-readouts {
+        width: 100%;
+        height: auto;
         margin-top: 1;
-        align: left middle;
     }
-    .vlabel {
-        width: 10;
-        height: 1;
-        color: #c4c4c4;
+    #v-readouts .vblock {
+        margin-top: 0;
+        height: auto;
     }
-    .vrow AsciiSlider {
-        width: 1fr;
-        min-width: 6;
-        height: 1;
-    }
-    .vvalue {
-        width: 14;
-        height: 1;
-        text-align: right;
-        color: #9a9a9a;
+    #v-readouts .readout {
+        margin-top: 1;
     }
 
     /* ---- status ---- */

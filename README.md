@@ -160,16 +160,30 @@ is in charge of the blades, and what happens if something goes wrong.
 ### What you see
 
 ```
- TELEMETRY            CONTROL                 SAFETY
- CPU  61.0 °C max 99  [*] Manual              guard   CPU 99 · GPU 88 °C
- GPU  55.0 °C 42 %    [ ] SMART               smart   60..255 PWM
- VRM* board 48.2 °C   [ ] BIOS Auto           emerg   CPU 93 · GPU 83 °C
- правый  2540 RPM     Right fan [====] 128    hold    180 PWM
- левый   2410 RPM     Left  fan [====] 128    preset  victus-2026-09-30
- MODE manual          (0.4 s write debounce)  access  passwordless
+ CONTROL                      TELEMETRY
+ [*] Manual                   CPU  61.0 °C max 99
+ [ ] SMART                    GPU  55.0 °C 42 %
+ [ ] BIOS Auto                VRM* board 48.2 °C
+ ────────────────────────
+ Right fan [███████░░░] 128   правый  2540 RPM PWM 128 50 %
+ Left  fan [███████░░░] 128   левый   2410 RPM PWM 128 50 %
+                              MODE manual
+ (top: modes and knobs,       SAFETY
+  bottom: target and ~RPM)    guard   CPU 99 · GPU 88 °C
+ set 128/128                  smart   60..255 PWM
+ ~1024 / 1024 RPM             emerg   CPU 93 · GPU 83 °C
+                              hold    180 PWM
+                              preset  victus-2026-09-30
+                              access  passwordless
  ──────────────────────────────────────────────────────────────────────
 status: SMART ▸ 128/140
 ```
+
+The knobs are the same widget as on the **Backlight** tab: a bar with a
+ruler underneath, drag / wheel / arrow keys, and an exact-number box beside
+it — type `128` and press Enter (or leave the box), the value is clamped to
+0..255 and written 0.4 s later, like the last drag step. The right column
+stacks two panels: telemetry on top, safety limits below.
 
 Telemetry is polled once a second and is **read-only, no root**: hwmon
 temperatures/RPM/PWM plus `nvidia-smi` (run in a worker thread — it can take
@@ -194,7 +208,7 @@ temperatures/RPM/PWM plus `nvidia-smi` (run in a worker thread — it can take
 
 | Mode | What it does | Notes |
 |---|---|---|
-| **Manual** | two sliders set PWM 0..255 (0–100 %) per fan, written 0.4 s after the last drag | entering Manual is safe (the driver snapshots the current RPM) |
+| **Manual** | two knobs set PWM 0..255 (0–100 %) per fan — drag them or type the exact number in the box, written 0.4 s after the last step | entering Manual is safe (the driver snapshots the current RPM) |
 | **SMART** | autopilot: predictive controller, 1 s step, thresholds from `vertil/config/presets.json` | **starts on TUI launch** (first run) and is remembered, see below |
 | **BIOS Auto** | hands both fans back to firmware | needs a **second click within 30 s** — see below |
 
