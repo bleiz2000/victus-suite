@@ -367,7 +367,17 @@ class Brutal:
 
 class Smart:
     """Предиктивное управление: экстраполяция dT/dt, пропорциональная полоса,
-    двухскоростной slew-limit, приоритет VRM-канала, аварийный обход."""
+    двухскоростной slew-limit, приоритет VRM-канала, аварийный обход.
+
+    Авария не прыгает в 100% мгновенно: один «горячий» снимок может быть
+    всплеском (бурст браузера, индексация), поэтому вход в аварию требует
+    EMERG_STREAK подряд горячих снимков, а сами вентиляторы разгоняются
+    быстрым, но конечным темпом EMERG_RISE_MULT × rise_pwm_per_s.
+    Это кодовое поведение, а не тюнинг: значения presets.smart не трогаются.
+    """
+
+    EMERG_STREAK = 2       # подряд «горячих» снимков (~2 с) до входа в аварию
+    EMERG_RISE_MULT = 4    # темп разгона в аварии = rise_pwm_per_s × множитель
 
     def __init__(self, preset: dict | None = None, seed=None):
         p = (preset or load_preset())["smart"]
@@ -398,6 +408,7 @@ class Smart:
             i1, i2 = seed
         self.p1, self.p2 = float(i1), float(i2)
         self.hist = []
+        self._hot = 0
         self.written1 = self.written2 = None
 
     @staticmethod
@@ -439,12 +450,19 @@ class Smart:
         t1 = self.FLOOR + (self.CEIL - self.FLOOR) * clamp(score1, 0.0, 1.0)
         t2 = self.FLOOR + (self.CEIL - self.FLOOR) * clamp(score2, 0.0, 1.0)
 
-        emerg = tc >= self.e_cpu or tg >= self.e_gpu
+        # авария: streak подряд горячих снимков, разгон быстрым темпом —
+        # без мгновенного прыжка в 100 % (см. EMERG_STREAK/EMERG_RISE_MULT)
+        self._hot = self._hot + 1 if (tc >= self.e_cpu or tg >= self.e_gpu) else 0
+        emerg = self._hot >= self.EMERG_STREAK
+        step = dt if dt > 0 else 1.0
         if emerg:
-            self.p1 = self.p2 = float(self.CEIL)
-            act = "SMART: EMERGENCY 100%"
+            rise = self.RISE * self.EMERG_RISE_MULT * step
+            self.p1 += clamp(self.CEIL - self.p1, -self.FALL * step, rise)
+            self.p2 += clamp(self.CEIL - self.p2, -self.FALL * step, rise)
+            self.p1 = clamp(self.p1, self.FLOOR, self.CEIL)
+            self.p2 = clamp(self.p2, self.FLOOR, self.CEIL)
+            act = "SMART: EMERGENCY cpu=%.0f gpu=%.0f ramp100%%" % (tc, tg)
         else:
-            step = dt if dt > 0 else 1.0
             self.p1 += clamp(t1 - self.p1, -self.FALL * step, self.RISE * step)
             self.p2 += clamp(t2 - self.p2, -self.FALL * step, self.RISE * step)
             # кеп по шуму (см. presets.smart.caps) — снимается при перегреве

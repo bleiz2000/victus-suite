@@ -133,6 +133,8 @@ class VertilTab(Vertical):
         self._last_step = time.monotonic()
         self._fail_count = 0
         self._emerg_shown = None
+        self._emerg_active = False
+        self._smart_log_t = 0.0
         self._want_restore = False
 
     # --- композиция ---------------------------------------------------------
@@ -299,6 +301,7 @@ class VertilTab(Vertical):
             await self._stop_autopilot(status=t("tui.vertil_no_hwmon"), error=True)
             return
         p1, p2, action, changed = self._smart.update(snap, dt)
+        self._log_smart(snap, action, p1, p2)
         if not changed:
             return
         ok, msg = await vertil_core.call("set-pwm", str(p1), str(p2))
@@ -317,6 +320,29 @@ class VertilTab(Vertical):
         self._target = [p1, p2]
         self._set_status(action)
 
+    def _log_smart(self, snap, action, p1, p2):
+        """Пульс контроллера в лог: раз в минуту, на переходе аварии и на
+        скачках ≥20 PWM — чтобы после «вентиляторы вдруг закричали» было
+        видно температуры и цель в момент разгона."""
+        now = time.monotonic()
+        t = (snap.get("t_cpu"), snap.get("t_gpu"), snap.get("t_vrm"))
+        emerg = "EMERGENCY" in action
+        if emerg != self._emerg_active:
+            self._emerg_active = emerg
+            vlog.log_info(TOOL, "smart %s t=%s/%s/%s pwm=%s/%s" % (
+                "EMERGENCY on" if emerg else "EMERGENCY off",
+                t[0], t[1], t[2], p1, p2))
+        prev = self._setpoint
+        jump = ((prev[0] is not None and abs(p1 - prev[0]) >= 20)
+                or (prev[1] is not None and abs(p2 - prev[1]) >= 20))
+        if jump:
+            vlog.log_info(TOOL, "smart jump %s/%s -> %s/%s · %s" % (
+                prev[0], prev[1], p1, p2, action))
+        if now - self._smart_log_t >= 60.0:
+            self._smart_log_t = now
+            vlog.log_info(TOOL, "smart pwm=%s/%s t=%s/%s/%s · %s" % (
+                p1, p2, t[0], t[1], t[2], action))
+
     async def _start_autopilot(self, snap: dict | None = None,
                                status: str | None = None) -> bool:
         ok, msg = await vertil_core.call("set-mode", "1")
@@ -328,6 +354,7 @@ class VertilTab(Vertical):
         vertil_core.session["autopilot"] = True
         self._smart = None
         self._fail_count = 0
+        self._emerg_active = False
         self._last_step = time.monotonic()
         if snap is not None:
             self._setpoint = [snap.get("pwm1"), snap.get("pwm2")]
@@ -344,6 +371,7 @@ class VertilTab(Vertical):
         self._smart = None
         vertil_core.session["autopilot"] = False
         self._fail_count = 0
+        self._emerg_active = False
         self._set_sliders_enabled(True)
         self._sync_mode_buttons()
         if status:

@@ -257,7 +257,10 @@ from `state/fan_mode.json` — nothing is reset behind your back.
    — the same rule the lab `guard.sh` uses for a dead controller.
 3. **SMART stops after 10 consecutive failed writes** and says why; nothing
    is retried forever in the background.
-4. **Emergency chip:** CPU ≥ 93 °C or GPU ≥ 83 °C turns the status line red.
+4. **Emergency chip:** CPU ≥ 93 °C or GPU ≥ 83 °C turns the status line red;
+   the controller itself enters emergency only after 2 consecutive hot
+   samples and then ramps to 100 % at 4× the normal rise rate (~5 s) —
+   a single temperature spike no longer slams both fans to full speed.
 5. **No pretend-OK:** if `hp` hwmon or the passwordless rule is missing, the
    probe verdict is printed in the SAFETY panel (`passwordless` / `sudo` /
    `need password` / `no hwmon`) instead of silently failing on the next
