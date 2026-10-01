@@ -72,13 +72,13 @@ class Daemon:
         return ok, msg
 
     def effective_rgb(self, rgb=None) -> tuple:
-        """Что реально уйдёт в EC: power-off = чёрный, иначе глубина чёрного."""
+        """Что реально уйдёт в EC: power-off = чёрный, иначе уровень яркости."""
         picked = core._norm_rgb(
             rgb if rgb is not None else self.state["rgb"], self.state["rgb"]
         )
         if not self.state.get("power", True):
             return (0, 0, 0)
-        return core.apply_black_depth(picked, self.state.get("black_depth", 50))
+        return core.apply_brightness(picked, self.state.get("brightness", 100))
 
     async def start_cycle(self, colors, delay: float) -> tuple:
         await self.stop_cycle(silent=True)
@@ -149,8 +149,8 @@ class Daemon:
                         merged[key] = new[key]
                 merged["rgb"] = core._norm_rgb(merged.get("rgb"), self.state["rgb"])
                 merged["stops"] = core.norm_stops(merged.get("stops"))
-                merged["black_depth"] = core._clamp(
-                    int(core._num(merged.get("black_depth"), 50)), 0, 100
+                merged["brightness"] = core._clamp(
+                    int(core._num(merged.get("brightness"), 100)), 0, 100
                 )
                 merged["speed"] = core._clamp(
                     float(core._num(merged.get("speed"), 1.0)), 0.2, 5.0

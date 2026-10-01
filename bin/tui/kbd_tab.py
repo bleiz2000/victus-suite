@@ -57,7 +57,7 @@ MODE_NAMES = {
 NAME_WIDTH = 10
 
 # Числовые поля рядом с полосками: id полоски → (min, max, as_float)
-# У тонкой линии темноты (black) поля нет — только полоска.
+# У тонкой линии яркости (level) поля нет — только полоска.
 NUMBER_FIELDS = {
     "r": (0, 255, False),
     "g": (0, 255, False),
@@ -140,7 +140,7 @@ class KbdTab(Vertical):
     color = reactive((255, 255, 255))
     effect = reactive("none")
     speed = reactive(1.0)
-    black_depth = reactive(50)
+    brightness = reactive(100)
     stops = reactive(None)
     running = reactive(False)
     # True, пока интерфейс пересобирается (смена языка): петлю не глушить
@@ -154,11 +154,12 @@ class KbdTab(Vertical):
         self.power = bool(state.get("power", True))
         self.effect = state.get("effect", "none")
         self.speed = float(state.get("speed", 1.0))
-        self.black_depth = int(state.get("black_depth", 50))
+        self.brightness = int(state.get("brightness", 100))
         self.stops = list(state.get("stops"))
         self.running = False  # старт всегда статичный: только ручной Start
         self._engine = core.Engine()
         self._push_timer = None
+        self._level_timer = None
         self._syncing = False
 
     # --- композиция ------------------------------------------------------------
@@ -197,14 +198,14 @@ class KbdTab(Vertical):
                 yield from self._value_row("r", t("tui.lab_r"), 0, 255)
                 yield from self._value_row("g", t("tui.lab_g"), 0, 255)
                 yield from self._value_row("b", t("tui.lab_b"), 0, 255)
-                # тонкая линия темноты: одна строка, белая, без подписи и
-                # без поля числа — пустая подпись держит ту же выравнивание,
-                # что и у полосок выше
-                with Horizontal(classes="thin-row", id="row-black"):
+                # тонкая линия яркости: одна строка, без подписи и без поля
+                # числа — пустая подпись держит то же выравнивание, что и
+                # у полосок выше; рисуется как разделитель интерфейса
+                with Horizontal(classes="thin-row", id="row-level"):
                     yield Label("", classes="slider-label")
                     yield AsciiSlider(min=0, max=100, step=1,
-                                      value=int(self.black_depth),
-                                      id="black", ticks=False)
+                                      value=int(self.brightness),
+                                      id="level", ticks=False, hairline=True)
             with Horizontal(id="picker-bottom"):
                 yield Static("", id="preview")
                 with Vertical(id="bottom-right"):
@@ -227,7 +228,6 @@ class KbdTab(Vertical):
             "r": int(self.color[0]),
             "g": int(self.color[1]),
             "b": int(self.color[2]),
-            "black": int(self.black_depth),
         }[sid]
         with Horizontal(classes="slider-row", id=f"row-{sid}"):
             yield Label(label, classes="slider-label")
@@ -322,7 +322,7 @@ class KbdTab(Vertical):
             "effect": self.effect,
             "speed": round(float(self.speed), 2),
             "stops": list(self.stops),
-            "black_depth": int(self.black_depth),
+            "brightness": int(self.brightness),
         }
 
     async def _store(self):
@@ -343,11 +343,46 @@ class KbdTab(Vertical):
             self._push_timer = None
         return self._store()
 
+    def _schedule_level(self, delay: float = 0.4):
+        """Уровень яркости уходит в свет сам: 0.4 с тишины после шага.
+
+        Та же схема, что у крутилок PWM: пока тянешь линию — тишина,
+        остановился — пишем. Без Apply, иначе полоска «не работает».
+        """
+        if self._level_timer is not None:
+            self._level_timer.stop()
+        self._level_timer = self.set_timer(
+            delay, lambda: self.run_worker(self._apply_level(), exclusive=True)
+        )
+
+    async def _apply_level(self):
+        """Записать уровень яркости в клавиатуру, не трогая выбранную петлю.
+
+        Пока крутится эффект — петлю не гасим: push_state (set) заставит
+        демон пересобрать её цвета уже с новым уровнем. В покое — та же
+        запись, что у кнопки Apply (гасим чужую петлю, пишем effective).
+        """
+        if self.running:
+            await self._store_now()
+            self._refresh_readout()
+            return
+        await self._engine.kill_loop()
+        self.query_one("#sine", SineWave).set_calm(True)
+        await self._store_now()
+        color = self._effective()
+        success, msg = await self._engine.apply(self.color, color)
+        if not success:
+            self._set_status(msg or t("tui.apply_failed", rc=1), error=True)
+            vlog.log_error(TOOL, f"level apply failed: {msg}", exc=False)
+            return
+        self._set_status(t("tui.applied", color=core.to_hex(color)))
+        self._refresh_preview(color)
+
     def _effective(self, color=None) -> tuple:
         base = tuple(color if color is not None else self.color)
         if not self.power:
             return (0, 0, 0)
-        return core.apply_black_depth(base, self.black_depth)
+        return core.apply_brightness(base, self.brightness)
 
     # --- отрисовка состояния ---------------------------------------------------
 
@@ -359,7 +394,7 @@ class KbdTab(Vertical):
     def _set_value_text(self, sid, text):
         """Обновить число рядом с полоской, не мешая тому, кто в него печатает.
 
-        У тонкой линии темноты поля нет — для неё просто нечего трогать.
+        У тонкой линии яркости поля нет — для неё просто нечего трогать.
         """
         nodes = self.query(f"#{sid}-val").nodes
         field = next((n for n in nodes if isinstance(n, Input)), None)
@@ -368,7 +403,7 @@ class KbdTab(Vertical):
         field.value = str(text)
 
     def _sync_controls(self):
-        """Полоски, числовые поля, HEX и превью — по color / black_depth."""
+        """Полоски, числовые поля, HEX и превью — по color / brightness."""
         if self._syncing:
             return
         self._syncing = True
@@ -377,7 +412,7 @@ class KbdTab(Vertical):
                 "r": self.color[0],
                 "g": self.color[1],
                 "b": self.color[2],
-                "black": self.black_depth,
+                "level": self.brightness,
             }
             for sid, value in targets.items():
                 self.query_one(f"#{sid}", AsciiSlider).set_value(value)
@@ -408,11 +443,10 @@ class KbdTab(Vertical):
         raw = core.to_hex(self.color)
         applied = self._effective()
         applied_hex = core.to_hex(applied)
+        # строка под HEX: что реально ушло в свет и на какой силе
+        level = self.brightness if self.power else 0
         extra = self.query_one("#read-applied", Static)
-        if applied_hex != raw:
-            extra.update(Text(f"→ {applied_hex}", style="bold #ffd766"))
-        else:
-            extra.update(Text(""))
+        extra.update(Text(f"→ {applied_hex} {level}%", style="bold #ffd766"))
         self._refresh_preview(applied)
 
     def _set_color(self, color):
@@ -503,12 +537,11 @@ class KbdTab(Vertical):
         if self._syncing:
             return
         sid = event.slider.id
-        if sid == "black":
-            self.black_depth = round(event.value)
-            self._sync_controls()  # поле числа, превью и «→» применённый цвет
+        if sid == "level":
+            self.brightness = round(event.value)
+            self._sync_controls()  # превью и «→ #hex %» применённый свет
             self._schedule_store()
-            if self.running:
-                self.run_worker(self._store_now(), exclusive=False)
+            self._schedule_level()  # и сама запись в клавиатуру — живьём
             return
         if sid == "speed":
             self.speed = round(event.value, 1)
@@ -658,6 +691,8 @@ class KbdTab(Vertical):
     def on_unmount(self):
         if self._push_timer is not None:
             self._push_timer.stop()
+        if self._level_timer is not None:
+            self._level_timer.stop()
         timer = getattr(self, "_poll", None)
         if timer is not None:
             timer.stop()

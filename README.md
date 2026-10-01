@@ -135,9 +135,17 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
   and a gold highlight on the active tab (the Fans tab is gold as well);
 - three long ticked sliders — `Red`/`Green`/`Blue` (0…255), each with an
   exact numeric box beside it: click it and type the value — plus one
-  **thin white line under them, black ↔ white** (0 = black, 50 = your colour,
-  100 = white): one row, no label, no box — it is part of the panel, not a
-  separate control;
+  **thin brightness line under them**: 0 = light off, 100 = your colour at
+  full strength, the middle is half strength (the hardware has no brightness
+  byte, so strength = colour × level: the diode really emits less light
+  while the hue stays the same). The line is one label-less row drawn like a
+  panel divider, and the `→ #hex 66%` line under the Hex box shows what
+  actually went to the keyboard and at what strength;
+- the brightness line writes to the keyboard **immediately, without
+  `Apply`** — the same scheme as the fan knobs: 0.4 s of quiet after the
+  last step and the level goes to the EC; while an effect is running the
+  loop is not killed — the daemon just rebuilds its colours with the new
+  level;
 - mouse input is rate-limited: drag refreshes at 60 Hz and wheel bursts
   (touchpad, smooth wheel) collapse into a few steps — the bar follows the
   pointer instead of lagging and jumping around;

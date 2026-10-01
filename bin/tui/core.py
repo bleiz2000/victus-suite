@@ -1,7 +1,7 @@
 """Ядро victus-suite: состояние, градиент, каналы, разговор с фоновым демоном.
 
 Один источник правды для TUI (bin/tui/*) и демона (bin/victusd):
-  * состояние  — state/last_state.json (цвет, режим, скорость, стопы, black depth);
+  * состояние  — state/last_state.json (цвет, режим, скорость, стопы, яркость);
   * градиент   — 4 слота стопов → плавная петля цвета (косинусная интерполяция);
   * запись     — всегда через victus-kbd: сначала ipc-сокет демона, иначе локально.
 
@@ -49,7 +49,7 @@ DEFAULTS = {
     "effect": "none",
     "speed": 1.0,
     "stops": [None, None, None, None],
-    "black_depth": 50,
+    "brightness": 100,
     "running": False,
 }
 
@@ -142,8 +142,12 @@ def load_state() -> dict:
     state = dict(DEFAULTS)
     if isinstance(data, dict):
         state.update({k: v for k, v in data.items() if k in DEFAULTS})
+        if "brightness" not in data and "black_depth" in data:
+            # миграция со старого ключа «темнота» (50 = база) на уровень
+            # яркости (100 = полная сила): старое «50» означало обычный свет
+            state["brightness"] = _clamp(int(_num(data.get("black_depth"), 50)) * 2, 0, 100)
     state["rgb"] = _norm_rgb(state.get("rgb"), DEFAULTS["rgb"])
-    state["black_depth"] = _clamp(int(_num(state.get("black_depth"), 50)), 0, 100)
+    state["brightness"] = _clamp(int(_num(state.get("brightness"), 100)), 0, 100)
     state["speed"] = _clamp(float(_num(state.get("speed"), 1.0)), 0.2, 5.0)
     state["power"] = bool(state.get("power", True))
     state["effect"] = state.get("effect") if state.get("effect") in ("none", "cycle", "fade") else "none"
@@ -236,23 +240,19 @@ def hex_to_rgb(value):
     return [int(v[i:i + 2], 16) for i in (0, 2, 4)]
 
 
-def apply_black_depth(rgb, bd) -> tuple:
-    """Шкала «Чёрный — База — Белый»: 0 = чёрный, 50 = база, 100 = белый.
+def apply_brightness(rgb, level) -> tuple:
+    """Уровень подсветки: 100 = цвет в полную силу, 0 = свет выключен.
 
-    Плавный lerp к цели: t = |bd - 50| / 50. Правее середины базовый цвет
-    смешивается с белым, левее — с чёрным; ровно 50 возвращает цвет как есть.
-    Раньше тут была гамма 0.5..1.5, которая яркие цвета почти не затемняла
-    (см. сессию 2026-10-01 в PROGRESS_LOG).
+    Аппаратного байта яркости в железе нет (см. docs/03: WMI-событие
+    HPWMI_BACKLIT_KB_BRIGHTNESS в Linux не пробрасывается, кандидат EC 0x29
+    не подтверждён), поэтому сила света делается масштабированием цвета:
+    диод физически светит слабее, оттенок при этом не меняется — раньше
+    шкала 0/50/100 вымывала цвет в белый (см. сессию 2026-10-01 в
+    PROGRESS_LOG), и красный превращался в розовый.
     """
-    s = _clamp(int(bd), 0, 100)
-    base = tuple(_clamp(int(c), 0, 255) for c in rgb)
-    if s == 50:
-        return base
-    t = abs(s - 50) / 50.0
-    target = (255, 255, 255) if s > 50 else (0, 0, 0)
+    k = _clamp(int(_num(level, 100)), 0, 100) / 100.0
     return tuple(
-        _clamp(round(base[i] + (target[i] - base[i]) * t), 0, 255)
-        for i in range(3)
+        _clamp(int(round(_clamp(int(c), 0, 255) * k)), 0, 255) for c in rgb
     )
 
 
@@ -406,7 +406,7 @@ def _sudo_hint(text: str) -> str:
 def colors_for_state(state: dict) -> list:
     """Петля для режима: cycle = градиент стопов, fade = разгон до черного.
 
-    На выходе — уже «глубина чёрного»: клавиатура получает финальный цвет.
+    На выходе — уже с уровнем яркости: клавиатура получает финальный цвет.
     Длина петли — step_count(speed): ступеней максимум, сколько влезает
     в период LOOP_SECONDS/speed с учётом потолка EC.
     """
@@ -416,8 +416,8 @@ def colors_for_state(state: dict) -> list:
     else:
         grad = Gradient(state.get("stops"), base=state.get("rgb", (255, 255, 255)))
         raw = grad.samples(n)
-    bd = state.get("black_depth", 50)
-    return [to_hex(apply_black_depth(c, bd)) for c in raw]
+    level = state.get("brightness", 100)
+    return [to_hex(apply_brightness(c, level)) for c in raw]
 
 
 async def local_apply(rgb) -> tuple:
@@ -548,7 +548,7 @@ class Engine:
         """Ручной цвет: пишет напрямую в EC, минуя демон.
 
         rgb — исходный цвет, effective — что реально уходит в EC
-        (power/black_depth). Петля гасится отдельно (kill_loop) ДО push
+        (power/brightness). Петля гасится отдельно (kill_loop) ДО push
         state, иначе демон при `set` перезапустит цикл поверх цвета.
         Прямая запись идёт первой (мгновенно), затем демон синхронизирует
         своё state, чтобы status/restore показывали тот же цвет.

@@ -6,7 +6,10 @@
               ALLOW_SELECT=False: клик двигает ползунок, а не выделяет текст.
               ticks=True — вторая строка с делениями (риски каждые 10% и
               подписи краёв/середины): видно, куда ведёт ползунок; без
-              делений полоска — ровно одна строка (тонкая линия темноты).
+              делений полоска — ровно одна строка.
+              hairline=True — тонкая линия-разделитель вместо блоков:
+              без скобок, одинаковая толщина на обеих половинах, залитая
+              часть яркая, пустая — тусклая (цвет отличает, не форма).
 
 SineWave     сглаженная синусоида (9 подуровней высоты внутри ячейки),
              живая анимация, скорость = Effect Speed.
@@ -67,6 +70,7 @@ class AsciiSlider(Widget):
         unit: str = "",
         *,
         ticks: bool = False,
+        hairline: bool = False,
         id: str | None = None,
         classes: str | None = None,
     ):
@@ -76,6 +80,7 @@ class AsciiSlider(Widget):
         self.step = float(step) or 1.0
         self.unit = unit
         self.ticks = bool(ticks)
+        self.hairline = bool(hairline)
         self._drag = False
         self._last_move = 0.0
         self._last_wheel = 0.0
@@ -108,9 +113,19 @@ class AsciiSlider(Widget):
 
     def render(self) -> Text:
         width = max(self.size.width, 3)
+        text = Text()
+        if self.hairline:
+            # Линия-разделитель: один глиф на обеих половинах — «толстое/
+            # тонкое» давало ступеньку на границе и выглядело криво, а сетка
+            # ░ вообще читалась как мусор. Заливку от пустоты отличает
+            # только цвет: яркая от виджета, тусклая — dim.
+            span = max(width, 1)
+            filled = max(0, min(span, round(self.fraction * span)))
+            text.append("━" * filled)
+            text.append("━" * (span - filled), style="dim")
+            return text
         inner = max(width - 2, 1)
         filled = max(0, min(inner, round(self.fraction * inner)))
-        text = Text()
         text.append("[", style="dim")
         text.append("█" * filled, style="bold")
         text.append("░" * (inner - filled))
