@@ -360,8 +360,14 @@ class KbdTab(Vertical):
                 hex_input.value = core.to_hex(self.color)
             wave = self.query_one("#sine", SineWave)
             wave.base = tuple(self.color)
-            wave.set_slots(self.stops)
-            wave.speed = self.speed
+            # волна сама перерисовывается по тику (0.12 с) — на драге её
+            # не трогаем, иначе каждый шаг мыши гоняет дорогой рендер
+            target = list(self.stops or [])[: wave.slots_count]
+            target += [None] * (wave.slots_count - len(target))
+            if list(wave.slots) != target:
+                wave.set_slots(self.stops)
+            if wave.speed != self.speed:
+                wave.speed = self.speed
             self._refresh_readout()
         finally:
             self._syncing = False

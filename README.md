@@ -125,6 +125,9 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 - four long ticked sliders — `Red`/`Green`/`Blue` (0…255) and `Shade`
   (0…100: **0 = black, 50 = your color, 100 = white**), each with an exact
   numeric box beside it: click it and type the value;
+- mouse input is rate-limited: drag refreshes at 60 Hz and wheel bursts
+  (touchpad, smooth wheel) collapse into a few steps — the bar follows the
+  pointer instead of lagging and jumping around;
 - the `Hex` field previews **live while you type**; `Enter` (or `Apply`)
   sends it to the keyboard, a broken hex only restores the field;
 - `Cycle`/`Fade`/`Static` modes, power switch and `Effect Speed`

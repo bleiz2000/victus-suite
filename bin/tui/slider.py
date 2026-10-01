@@ -12,6 +12,7 @@ SineWave     сглаженная синусоида (9 подуровней в�
 """
 
 import math
+import time
 
 from rich.text import Text
 from textual import events
@@ -20,6 +21,15 @@ from textual.reactive import reactive
 from textual.widget import Widget
 
 RAMP = ("▔", "▇", "▆", "▅", "▄", "▃", "▂", "▁")
+
+# Пределы обновления от мыши. Терминал шлёт поток событий (колесо тачпада и
+# «пильная» мышь — десятки сообщений за доли секунды); без потолка петля
+# сообщений догоняет мышь секундами: полоска «зависает», а потом дёргается
+# кусками — то самое «телепортирование».
+MOVE_DT = 0.016       # драг: значение меняется не чаще 60 раз в секунду
+WHEEL_DT = 0.05       # колесо: накопленные шаги применяются тиками по 50 мс
+WHEEL_MAX = 4.0       # сколько шагов колеса успеть за один тик
+WHEEL_BACKLOG = 10.0  # потолок «долга» колеса в шагах: лишнее теряется
 
 
 class AsciiSlider(Widget):
@@ -66,6 +76,12 @@ class AsciiSlider(Widget):
         self.unit = unit
         self.ticks = bool(ticks)
         self._drag = False
+        self._last_move = 0.0
+        self._last_wheel = 0.0
+        self._pending_x = None
+        self._flush = None
+        self._wheel_pending = 0.0
+        self._wheel_timer = None
         self.value = self._clamp(self._quantize(value))
 
     def _quantize(self, v: float) -> float:
@@ -154,7 +170,12 @@ class AsciiSlider(Widget):
     def on_mouse_down(self, event: events.MouseDown):
         if self.max <= self.min:
             return
+        if event.button != 1:  # правая/средняя кнопка — не наш драг
+            return
         self._drag = True
+        self._last_move = time.monotonic()
+        self._pending_x = None
+        self._stop_timer("_flush")
         self.capture_mouse(True)
         self._set_from_x(event.x)
         event.stop()
@@ -163,15 +184,49 @@ class AsciiSlider(Widget):
     def on_mouse_move(self, event: events.MouseMove):
         if not self._drag:
             return
-        self._set_from_x(event.x)
         event.stop()
+        now = time.monotonic()
+        if now - self._last_move >= MOVE_DT:
+            # применяется сразу; всё, что прилетело быстрее, сводится к
+            # последней позиции — хвост догонит таймером
+            self._stop_timer("_flush")
+            self._pending_x = None
+            self._last_move = now
+            self._set_from_x(event.x)
+        else:
+            self._pending_x = event.x
+            if self._flush is None:
+                self._flush = self.set_timer(MOVE_DT, self._flush_move)
+
+    def _flush_move(self):
+        """Догнать последнюю позицию мыши после паузы в потоке событий."""
+        self._flush = None
+        if self._drag and self._pending_x is not None:
+            x = self._pending_x
+            self._pending_x = None
+            self._last_move = time.monotonic()
+            self._set_from_x(x)
 
     def on_mouse_up(self, event: events.MouseUp):
         if not self._drag:
             return
+        # хвост событий свёрнут — последняя позиция мыши должна дойти;
+        # event.x не берём: некоторые терминалы присылают отпускание с
+        # мусорными координатами, и полоска «телепортировалась» бы
+        self._stop_timer("_flush")
+        if self._pending_x is not None:
+            x = self._pending_x
+            self._pending_x = None
+            self._set_from_x(x)
         self._drag = False
         self.capture_mouse(False)
         event.stop()
+
+    def _stop_timer(self, name: str):
+        timer = getattr(self, name, None)
+        if timer is not None:
+            timer.stop()
+            setattr(self, name, None)
 
     def on_key(self, event: events.Key):
         key = event.key
@@ -193,15 +248,53 @@ class AsciiSlider(Widget):
         event.prevent_default()
 
     def on_mouse_scroll_up(self, event: events.MouseScrollUp):
-        self.set_value(self.value + self.step, notify=True)
-        event.stop()
+        self._wheel(+1, event)
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown):
-        self.set_value(self.value - self.step, notify=True)
+        self._wheel(-1, event)
+
+    def _wheel(self, direction: int, event):
+        """Колесо: шаг копится и применяется тиками, а не пачкой за кадр.
+
+        Один «щелчок» колеса на обычной мыши = одно событие, оно
+        применяется сразу (отклик мгновенный); тачпад/гладкое колесо шлёт
+        десятки событий подряд — они сворачиваются в WHEEL_MAX шагов за
+        WHEEL_DT, поэтому значение едет ровно, а не прыгает на десятки.
+        """
         event.stop()
+        if self.max <= self.min:
+            return
+        limit = WHEEL_BACKLOG * self.step
+        self._wheel_pending = max(
+            -limit, min(limit, self._wheel_pending + direction * self.step)
+        )
+        if self._wheel_timer is not None:
+            return  # долг уже ждёт своего тика
+        if time.monotonic() - self._last_wheel >= WHEEL_DT:
+            self._apply_wheel()
+        else:
+            self._wheel_timer = self.set_timer(WHEEL_DT, self._apply_wheel)
+
+    def _apply_wheel(self):
+        self._wheel_timer = None
+        if self._wheel_pending == 0.0:
+            return
+        cap = WHEEL_MAX * self.step
+        part = max(-cap, min(cap, self._wheel_pending))
+        self._wheel_pending -= part
+        self._last_wheel = time.monotonic()
+        self.set_value(self.value + part, notify=True)
+        if self._wheel_pending != 0.0 and self.is_running:
+            self._wheel_timer = self.set_timer(WHEEL_DT, self._apply_wheel)
 
     def watch_value(self, value: float):
         self.refresh()
+
+    def on_unmount(self):
+        self._stop_timer("_flush")
+        self._stop_timer("_wheel_timer")
+        self._pending_x = None
+        self._drag = False
 
 
 MiniSlider = AsciiSlider
