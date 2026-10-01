@@ -1,17 +1,22 @@
-"""Вкладка «Подсветка» v3 — минималистичный пульт по новому ТЗ.
+"""Вкладка «Подсветка» — пульт в той же раскладке, что и вкладка вентиляторов.
 
-Слева  нет: колонка пресетов убрана, экран отдан полоскам (длиннее и удобнее).
+Слева  COLOR PICKER        — ровно как блок CONTROL у вентиляторов: сверху
+                             режимы (Static/Cycle/Fade) и питание с линейкой-
+                             разделителем, ниже четыре полоски R / G / B
+                             (0..255) и «Насыщенность» (0 = чёрный, 50 =
+                             базовый цвет, 100 = белый) — у каждой деления и
+                             поле точного числа. Внизу блок ридаутов: поле HEX
+                             (живое превью, Enter применяет цвет), большое
+                             квадратное превью и кнопки Apply / Copy HEX —
+                             как «цель / ~RPM» у вентиляторов.
+Справа  колонка из двух     панелей: сверху Custom Effect Creator с живой
+                             синусоидой (1fr, как ТЕЛЕМЕТРИЯ), ниже LIGHTING
+                             EFFECTS — Effect Speed (с полем числа) и
+                             Start / Stop (auto, как БЕЗОПАСНОСТЬ).
 
-В центре COLOR PICKER      — ровно четыре полоски: R / G / B (0..255) и
-                             «Насыщенность» (0 = чёрный, 50 = базовый цвет,
-                             100 = белый). У каждой полоски — деления и поле
-                             с числом: кликнуть и вписать точное значение.
-                             Ниже — поле HEX (живое превью, Enter применяет
-                             цвет к клавиатуре), большое квадратное превью и
-                             кнопки Apply / Copy HEX.
-Справа  LIGHTING EFFECTS   — сверху режимы (Static/Cycle/Fade) и питание,
-                             ниже Custom Effect Creator с живой синусоидой,
-                             Effect Speed (тоже с полем числа) и Start / Stop.
+Весь блок покрашен «золотым свечением»: золотые рамки и заголовки панелей,
+золотые полоски, золотая рамка превью и золотая кнопка Apply — подсветка
+должна читаться как свет, а не как серая таблица.
 
 Вся запись на клавиатуру идёт через фоновый демон (bin/victusd) по unix-сокету;
 без демона TUI пишет напрямую через victus-kbd. Экран показывает ровно то, что
@@ -157,7 +162,9 @@ class KbdTab(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             yield from self._color_panel()
-            yield from self._effects_panel()
+            with Vertical(id="kside"):
+                yield from self._creator_panel()
+                yield from self._effects_panel()
         with Horizontal(id="statusline"):
             with Horizontal(id="status-flow"):
                 yield Static("", id="color-tag")
@@ -181,17 +188,18 @@ class KbdTab(Vertical):
         panel = Vertical(classes="panel", id="color-panel")
         panel.border_title = t("tui.sec_picker")
         with panel:
+            yield from self._mode_block()
             with Vertical(id="picker-top"):
                 yield from self._value_row("r", t("tui.lab_r"), 0, 255)
                 yield from self._value_row("g", t("tui.lab_g"), 0, 255)
                 yield from self._value_row("b", t("tui.lab_b"), 0, 255)
                 yield from self._value_row("black", t("tui.lab_black"), 0, 100)
-            with Horizontal(id="hex-row"):
-                yield Label(t("tui.hex_label"), classes="mode-label")
-                yield Input(value=core.to_hex(self.color), id="hex-input")
             with Horizontal(id="picker-bottom"):
                 yield Static("", id="preview")
                 with Vertical(id="bottom-right"):
+                    with Horizontal(id="hex-row"):
+                        yield Label(t("tui.hex_label"), classes="mode-label")
+                        yield Input(value=core.to_hex(self.color), id="hex-input")
                     with Vertical(id="readouts"):
                         yield Static("", id="read-applied", classes="readout applied")
                     with Horizontal(id="picker-actions"):
@@ -217,17 +225,20 @@ class KbdTab(Vertical):
                 value=str(start), id=f"{sid}-val", classes="num-input", type="integer"
             )
 
+    def _creator_panel(self):
+        """Верх правой колонки: живая синусоида (по образцу ТЕЛЕМЕТРИИ)."""
+        panel = Vertical(classes="panel", id="creator-panel")
+        panel.border_title = t("tui.sec_creator")
+        with panel:
+            yield SineWave(
+                slots=self.stops, base=self.color, speed=self.speed, id="sine"
+            )
+
     def _effects_panel(self):
+        """Низ правой колонки: скорость эффекта и Start / Stop (как БЕЗОПАСНОСТЬ)."""
         panel = Vertical(classes="panel", id="effects-panel")
         panel.border_title = t("tui.sec_effects")
         with panel:
-            yield from self._mode_block()
-            creator = Vertical(id="creator")
-            creator.border_title = t("tui.sec_creator")
-            with creator:
-                yield SineWave(
-                    slots=self.stops, base=self.color, speed=self.speed, id="sine"
-                )
             with Horizontal(id="speed-row"):
                 yield Label(t("tui.speed_label"), id="speed-label")
                 yield AsciiSlider(
@@ -383,7 +394,7 @@ class KbdTab(Vertical):
         applied_hex = core.to_hex(applied)
         extra = self.query_one("#read-applied", Static)
         if applied_hex != raw:
-            extra.update(Text(f"→ {applied_hex}", style="bold #7ee787"))
+            extra.update(Text(f"→ {applied_hex}", style="bold #ffd766"))
         else:
             extra.update(Text(""))
         self._refresh_preview(applied)

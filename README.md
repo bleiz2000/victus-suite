@@ -121,7 +121,15 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 `victus-kbd`, the palette comes from `victus_palette`, state is kept in
 `state/last_state.json`.
 
-- compact **Bento 960×540** layout: COLOR PICKER / LIGHTING EFFECTS;
+- layout mirrors the **Fans** tab: the left **COLOR PICKER** panel opens
+  with `Cycle`/`Fade`/`Static` and the power switch under a divider, then
+  the four sliders, and a pinned bottom block with `Hex`, the big preview
+  and `Apply` · `Copy hex`; the right column stacks **Custom Effect
+  Creator** (live sine, 1fr) over **LIGHTING EFFECTS** (Effect Speed and
+  Start / Stop);
+- the tab is painted in **golden glow**: gold panel frames and titles,
+  gold slider bars, gold frame around the preview, gold `Apply` / `Start`
+  and a gold highlight on the Backlight tab;
 - four long ticked sliders — `Red`/`Green`/`Blue` (0…255) and `Shade`
   (0…100: **0 = black, 50 = your color, 100 = white**), each with an exact
   numeric box beside it: click it and type the value;
@@ -130,8 +138,9 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
   pointer instead of lagging and jumping around;
 - the `Hex` field previews **live while you type**; `Enter` (or `Apply`)
   sends it to the keyboard, a broken hex only restores the field;
-- `Cycle`/`Fade`/`Static` modes, power switch and `Effect Speed`
-  (0.2…5.0, also typeable) sit in the same LIGHTING EFFECTS panel;
+- `Effect Speed` (0.2…5.0, also typeable) sits in the LIGHTING EFFECTS
+  panel together with `Start` / `Stop`; the modes and the power switch
+  live in the COLOR PICKER panel, above the sliders;
 - `Apply` · `Copy hex`, status line;
 - **wave speed follows Effect Speed**: amplitude and period are lerped toward
   the target every 0.12 s, no jumps;

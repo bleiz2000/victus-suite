@@ -26,8 +26,12 @@ class VictusScreen(Container):
         shell.border_title = t("tui.app_title")
         with shell:
             with Horizontal(id="titlerow"):
-                yield Button(t("tui.tab_kbd"), id="tab-kbd", classes="tab")
-                yield Button(t("tui.tab_vertil"), id="tab-vertil", classes="tab")
+                # активная вкладка подсвечена уже на старте (иначе ни одна
+                # не выглядит выбранной до первого клика)
+                yield Button(t("tui.tab_kbd"), id="tab-kbd",
+                             classes=f"tab{' on' if active != 'vertil' else ''}")
+                yield Button(t("tui.tab_vertil"), id="tab-vertil",
+                             classes=f"tab{' on' if active == 'vertil' else ''}")
                 yield Button(t("tui.btn_lang"), id="lang")
             kbd = KbdTab(id="kbd")
             vertil = VertilTab(id="vertil")
@@ -86,6 +90,14 @@ class VictusApp(App):
         color: #7ee787;
         text-style: bold;
     }
+    #titlerow #tab-kbd.on {
+        background: #2a2210;
+        color: #ffd766;
+    }
+    #titlerow #tab-kbd.on:hover {
+        background: #3a2f12;
+        color: #fff2c8;
+    }
     #titlerow #lang {
         width: auto;
         min-width: 0;
@@ -118,8 +130,25 @@ class VictusApp(App):
         border-title-align: center;
         background: #0b0b0b;
     }
-    #color-panel { width: 1fr; }
-    #effects-panel { width: 34; }
+    /* золотое свечение: рамки и заголовки панелей подсветки */
+    #color-panel {
+        width: 1fr;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
+    }
+    #kside { width: 42; height: 100%; }
+    #creator-panel {
+        width: 100%;
+        height: 1fr;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
+    }
+    #effects-panel {
+        width: 100%;
+        height: auto;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
+    }
     #vcontrol { width: 1fr; }
     #vside { width: 42; height: 100%; }
     #vtelemetry { width: 100%; height: 1fr; }
@@ -130,7 +159,7 @@ class VictusApp(App):
         height: auto;
         margin-bottom: 1;
         padding-bottom: 1;
-        border-bottom: solid #3a3a3a;
+        border-bottom: solid #8a6f2a;
     }
     #mode-block Button.mode {
         width: 100%;
@@ -145,11 +174,11 @@ class VictusApp(App):
         content-align: left middle;
     }
     #mode-block Button.mode:hover {
-        background: #1c1c1c;
-        color: #ffffff;
+        background: #2a2210;
+        color: #ffe9a8;
     }
     #mode-block Button.mode.on {
-        color: #ffffff;
+        color: #ffd766;
         text-style: bold;
     }
     .mode-row {
@@ -178,7 +207,7 @@ class VictusApp(App):
         background: #1c1c1c;
     }
     #power.-on .switch--slider {
-        color: #7ee787;
+        color: #ffd766;
     }
 
     /* ---- COLOR PICKER ---- */
@@ -186,7 +215,6 @@ class VictusApp(App):
         width: 100%;
         height: 1fr;
         align: left top;
-        padding-top: 1;
     }
     .slider-row {
         width: 100%;
@@ -204,6 +232,10 @@ class VictusApp(App):
         min-width: 6;
         height: 2;
     }
+    #color-panel .slider-row AsciiSlider,
+    #effects-panel #speed-row AsciiSlider {
+        color: #f0c34f;
+    }
     .num-input {
         width: 6;
         height: 1;
@@ -216,23 +248,33 @@ class VictusApp(App):
         background: #222222;
         color: #ffffff;
     }
+    #color-panel .num-input,
+    #effects-panel .num-input {
+        background: #171410;
+        color: #ffd766;
+    }
+    #color-panel .num-input:focus,
+    #effects-panel .num-input:focus {
+        background: #2a2210;
+        color: #fff2c8;
+    }
     #hex-row {
         width: 100%;
-        height: 1;
-        margin-top: 1;
+        height: 3;
+        margin-bottom: 1;
         align: left middle;
     }
     #hex-input {
-        width: 12;
-        height: 1;
+        width: 13;
+        height: 3;
         padding: 0 1;
-        border: none;
-        background: #171717;
-        color: #e8e8e8;
+        border: solid #8a6f2a;
+        background: #171410;
+        color: #ffd766;
     }
     #hex-input:focus {
-        background: #222222;
-        color: #ffffff;
+        background: #2a2210;
+        color: #fff2c8;
     }
     #picker-bottom {
         width: 100%;
@@ -244,7 +286,7 @@ class VictusApp(App):
         width: 14;
         height: 7;
         background: #808080;
-        border: none;
+        border: solid #ffd766;
         margin-right: 2;
     }
     #bottom-right {
@@ -263,7 +305,7 @@ class VictusApp(App):
         color: #b0b0b0;
     }
     .applied {
-        color: #7ee787;
+        color: #ffd766;
     }
     #picker-actions {
         width: 100%;
@@ -290,23 +332,28 @@ class VictusApp(App):
         background: #2e2e2e;
         color: #ffffff;
     }
+    #picker-actions #apply {
+        background: #ffd766;
+        color: #0b0b0b;
+    }
+    #picker-actions #apply:hover {
+        background: #ffe9a8;
+        color: #0b0b0b;
+    }
+    #picker-actions #copy-hex {
+        background: #241d0c;
+        color: #ffd766;
+    }
+    #picker-actions #copy-hex:hover {
+        background: #3a2f12;
+        color: #fff2c8;
+    }
 
     /* ---- EFFECTS ---- */
-    #creator {
-        width: 100%;
-        height: 1fr;
-        margin-top: 1;
-        padding: 0 1;
-        border: solid #4a4a4a;
-        border-title-color: #c8c8c8;
-        border-title-style: bold;
-        border-title-align: center;
-        background: #0b0b0b;
-    }
-    #sine {
+    #creator-panel #sine {
         width: 100%;
         height: 100%;
-        color: #d0d0d0;
+        color: #f0c34f;
     }
     #speed-row {
         width: 100%;
@@ -332,12 +379,12 @@ class VictusApp(App):
         align: left middle;
     }
     #effect-actions #effect-start {
-        background: #10240f;
-        color: #7ee787;
+        background: #ffd766;
+        color: #0b0b0b;
     }
     #effect-actions #effect-start:hover {
-        background: #17351a;
-        color: #b6ffbc;
+        background: #ffe9a8;
+        color: #0b0b0b;
     }
     #effect-actions #effect-stop {
         background: #2a1010;
@@ -423,7 +470,7 @@ class VictusApp(App):
         width: auto;
         height: 1;
         padding-right: 2;
-        color: #8a8a8a;
+        color: #ffd766;
     }
     #status {
         width: auto;
@@ -461,8 +508,8 @@ class VictusApp(App):
         width: 44;
         height: 16;
         padding: 0 1;
-        border: solid #6a6a6a;
-        border-title-color: #e8e8e8;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
         border-title-style: bold;
         border-title-align: center;
         background: #101010;
@@ -472,10 +519,10 @@ class VictusApp(App):
         height: 1fr;
         background: transparent;
         overflow-y: auto;
-        scrollbar-color: #6a6a6a;
-        scrollbar-color-hover: #8a8a8a;
-        scrollbar-background: #141414;
-        scrollbar-background-hover: #1c1c1c;
+        scrollbar-color: #8a6f2a;
+        scrollbar-color-hover: #ffd766;
+        scrollbar-background: #141210;
+        scrollbar-background-hover: #171410;
     }
     PickColorScreen .preset {
         width: 100%;
@@ -489,12 +536,12 @@ class VictusApp(App):
         content-align: left middle;
     }
     PickColorScreen .preset:hover {
-        background: #1e1e1e;
-        color: #ffffff;
+        background: #2a2210;
+        color: #fff2c8;
     }
     PickColorScreen .preset:focus {
-        background: #1e1e1e;
-        color: #ffffff;
+        background: #2a2210;
+        color: #ffd766;
         text-style: bold;
     }
     """
