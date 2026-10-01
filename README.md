@@ -1,6 +1,6 @@
 # OMEN Gaming Hub for Linux
 
-**Version:** v1.1.1 · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
+**Version:** v1.1.2 · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
 
 > **English (primary)** · [Русская версия →](README.ru.md)
 
@@ -16,7 +16,7 @@ Local project folder: `~/Work/victus-suite` → GitHub `victus-suite`.
 stage 2 (TUI on Textual), stage 3 (effects and power profiles).
 Details — `START_DEVELOPMENT.md` §4.
 
-## Installation (v1.1.1)
+## Installation (v1.1.2)
 
 **From a release (recommended):**
 
@@ -26,7 +26,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # TUI engine (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.1/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.2/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # symlinks + menu entry
 ```
@@ -105,10 +105,10 @@ Changer 120 200 255          # arbitrary RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # your own name (english)
 Changer mycolor
-victus_tui                   # TUI (v1.1.1)
+victus_tui                   # TUI (v1.1.2)
 ```
 
-### TUI (v1.1.1)
+### TUI (v1.1.2)
 
 ```bash
 victus_tui                   # launch (asks sudo on EC writes)
@@ -341,7 +341,7 @@ victus-suite/
 ├── PROGRESS_LOG.md               ← context journal (status, time, next step)
 ├── ROADMAP.md                    ← next stage: script → installable app
 ├── TZ.md                         ← full technical specification
-├── VERSION                       ← 1.1.1 (single source of truth)
+├── VERSION                       ← 1.1.2 (single source of truth)
 ├── install.sh                    ← ./install.sh [--remove] → symlinks + menu entry + icons
 ├── share/
 │   └── icons/                    ← black&white icon: victus-suite.svg, hicolor PNGs, make_icon.py

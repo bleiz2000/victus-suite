@@ -2,7 +2,7 @@
 
 > [English (primary) →](README.md) · **Русская версия**
 
-**Версия:** v1.1.1 · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
+**Версия:** v1.1.2 · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
 
 Аналог OMEN Gaming Hub для Linux: подсветка клавиатуры HP Victus/OMEN,
 режимы питания, вентиляторы, мониторинг и оверлей (замена Shift+F2).
@@ -16,7 +16,7 @@
 этап 2 (TUI на Textual), этап 3 (эффекты и профили питания).
 Подробности — `START_DEVELOPMENT.md` §4.
 
-## Установка (v1.1.1)
+## Установка (v1.1.2)
 
 **Из релиза (рекомендуется):**
 
@@ -26,7 +26,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # движок TUI (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.1/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.2/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # симлинки + ярлык в меню
 ```
@@ -105,10 +105,10 @@ Changer 120 200 255          # произвольный RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # своё имя (english)
 Changer mycolor
-victus_tui                   # TUI (v1.1.1)
+victus_tui                   # TUI (v1.1.2)
 ```
 
-### TUI (v1.1.1)
+### TUI (v1.1.2)
 
 ```bash
 victus_tui                   # запуск (при записи в EC спросит sudo)
@@ -341,7 +341,7 @@ victus-suite/
 ├── PROGRESS_LOG.md               ← журнал контекста (статус, время, следующий шаг)
 ├── ROADMAP.md                    ← следующий этап: скрипт → устанавливаемое приложение
 ├── TZ.md                         ← полное техническое задание
-├── VERSION                       ← 1.1.1 (источник правды по версии)
+├── VERSION                       ← 1.1.2 (источник правды по версии)
 ├── install.sh                    ← ./install.sh [--remove] → симлинки + ярлык меню + иконки
 ├── share/
 │   └── icons/                    ← ч/б иконка: victus-suite.svg, PNG для hicolor, make_icon.py
