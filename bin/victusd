@@ -28,7 +28,9 @@ import victus_log as vlog  # noqa: E402
 from tui import core  # noqa: E402
 
 TOOL = "victusd"
-VERSION = "1.0"
+# версия протокола/семантики state; дублирует core.DAEMON_VERSION — бампать
+# в паре с ним при изменении ключей state (TUI перезапускает устаревший демон)
+VERSION = "1.1"
 
 
 def now_stamp() -> str:

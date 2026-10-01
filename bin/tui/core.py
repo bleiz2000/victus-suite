@@ -24,6 +24,12 @@ _HERE = os.path.dirname(os.path.realpath(__file__))
 _BIN = os.path.dirname(_HERE)
 BACKEND = os.path.join(_BIN, "victus-kbd")
 DAEMON = os.path.join(_BIN, "victusd")
+# Версия протокола/семантики состояния демона. Бампать при любом изменении
+# ключей state или поведения (например, black_depth → brightness): TUI
+# сверяет её через ping в ensure_daemon и перезапускает устаревший демон —
+# иначе старый демон не знает новые ключи и перетирает запись TUI своим
+# effective_rgb (см. запись 2026-10-01 18:xx в PROGRESS_LOG).
+DAEMON_VERSION = "1.1"
 STATE_FILE = os.path.join(vlog.state_dir(), "last_state.json")
 
 QUICK = (
@@ -529,6 +535,10 @@ class Engine:
         data = await self.request("ping")
         return bool(data and data.get("ok"))
 
+    async def hello(self) -> dict | None:
+        """Полный ответ ping (version, pid, state) — проверка версии демона."""
+        return await self.request("ping")
+
     async def status(self) -> dict | None:
         return await self.request("status")
 
@@ -597,10 +607,31 @@ def spawn_daemon() -> int | None:
 
 
 async def ensure_daemon(timeout: float = 4.0) -> bool:
+    """Поднять демон; живой, но устаревший — перезапустить под новый код.
+
+    Старый демон не знает новые ключи state (свой effective_rgb перетирает
+    запись TUI: уровень яркости «не работает», свет возвращается сам) —
+    поэтому по ответу ping сверяем версию и, если она не совпадает,
+    просим демон выйти и поднимаем заново.
+    """
     path = sock_path()
     if os.path.exists(path):
-        if await Engine().ping():
-            return True
+        engine = Engine()
+        info = await engine.hello()
+        if info and info.get("ok"):
+            if info.get("version") == DAEMON_VERSION:
+                return True
+            vlog.log_info(
+                TOOL, f"daemon version {info.get('version')!r} != "
+                      f"{DAEMON_VERSION!r} — restart"
+            )
+            await engine.request("quit")
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + 3.0
+            while loop.time() < deadline and os.path.exists(path):
+                if not await Engine().ping():
+                    break
+                await asyncio.sleep(0.1)
         try:
             os.unlink(path)
         except OSError:

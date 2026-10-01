@@ -170,7 +170,10 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 The window lives in the background: `victusd` (unix socket
 `$XDG_RUNTIME_DIR/victus-suite-<uid>.sock`) keeps the effect running while the
 TUI is closed, `victus-tray` gives quick start/stop from the tray. Launching
-the TUI starts the daemon too if it is not running yet (`ensure_daemon`).
+the TUI starts the daemon too if it is not running yet, and restarts an
+outdated one: `ensure_daemon` compares the daemon's version on every launch,
+so an old daemon can never ignore new state keys and fight the TUI over the
+EC.
 
 **Fixed since alpha:** mouse-draggable ASCII sliders (no text selection).
 
