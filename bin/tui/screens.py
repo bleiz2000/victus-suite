@@ -86,15 +86,11 @@ class VictusApp(App):
         color: #e8e8e8;
     }
     #titlerow .tab.on {
-        background: #141c14;
-        color: #7ee787;
-        text-style: bold;
-    }
-    #titlerow #tab-kbd.on {
         background: #2a2210;
         color: #ffd766;
+        text-style: bold;
     }
-    #titlerow #tab-kbd.on:hover {
+    #titlerow .tab.on:hover {
         background: #3a2f12;
         color: #fff2c8;
     }
@@ -149,10 +145,32 @@ class VictusApp(App):
         border: solid #8a6f2a;
         border-title-color: #ffd766;
     }
-    #vcontrol { width: 1fr; }
-    #vside { width: 42; height: 100%; }
-    #vtelemetry { width: 100%; height: 1fr; }
-    #vlimits { width: 100%; height: auto; }
+    /* ---- VERTIL: компоновка ---- */
+    /* всё прижато вверх: управление во всю ширину сверху, ниже ряд
+       «телеметрия | безопасность»; пустое — ровной полосой у нижнего
+       края панели управления, а не дырой посередине */
+    #vcontrol {
+        width: 100%;
+        height: 1fr;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
+    }
+    #vpanels {
+        width: 100%;
+        height: auto;
+    }
+    #vtelemetry {
+        width: 1fr;
+        height: auto;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
+    }
+    #vlimits {
+        width: 36;
+        height: auto;
+        border: solid #8a6f2a;
+        border-title-color: #ffd766;
+    }
 
     #mode-block {
         width: 100%;
@@ -211,15 +229,33 @@ class VictusApp(App):
     }
 
     /* ---- COLOR PICKER ---- */
+    /* всё прижато вверх: панель тянется, пустое — полосой у нижнего края */
     #picker-top {
         width: 100%;
-        height: 1fr;
+        height: auto;
         align: left top;
     }
     .slider-row {
         width: 100%;
         height: 2;
         align: left middle;
+    }
+    /* тонкая линия темноты: одна строка, без подписи и без поля числа */
+    .thin-row {
+        width: 100%;
+        height: 1;
+        margin: 0;
+        align: left middle;
+    }
+    .thin-row .slider-label {
+        width: 16;
+        height: 1;
+    }
+    .thin-row AsciiSlider {
+        width: 1fr;
+        min-width: 6;
+        height: 1;
+        color: #ffffff;
     }
     .slider-label {
         width: 16;
@@ -260,19 +296,23 @@ class VictusApp(App):
     }
     #hex-row {
         width: 100%;
-        height: 3;
-        margin-bottom: 1;
+        height: 2;
+        margin-bottom: 0;
         align: left middle;
     }
+    /* подчёркивание вместо коробки: рамка по всему периметру съедала
+       строку контента и поле становилось пустым */
     #hex-input {
         width: 13;
-        height: 3;
+        height: 2;
         padding: 0 1;
-        border: solid #8a6f2a;
+        border: none;
+        border-bottom: solid #8a6f2a;
         background: #171410;
         color: #ffd766;
     }
     #hex-input:focus {
+        border-bottom: solid #ffd766;
         background: #2a2210;
         color: #fff2c8;
     }
@@ -283,11 +323,11 @@ class VictusApp(App):
         align: left middle;
     }
     #preview {
-        width: 14;
-        height: 7;
+        width: 10;
+        height: 5;
         background: #808080;
         border: solid #ffd766;
-        margin-right: 2;
+        margin-right: 1;
     }
     #bottom-right {
         width: 1fr;
@@ -413,9 +453,9 @@ class VictusApp(App):
     #v-mode-block {
         width: 100%;
         height: auto;
-        margin-bottom: 1;
+        margin-bottom: 0;
         padding-bottom: 1;
-        border-bottom: solid #3a3a3a;
+        border-bottom: solid #8a6f2a;
     }
     #v-mode-block Button.mode {
         width: 100%;
@@ -430,16 +470,16 @@ class VictusApp(App):
         content-align: left middle;
     }
     #v-mode-block Button.mode:hover {
-        background: #1c1c1c;
-        color: #ffffff;
+        background: #2a2210;
+        color: #ffe9a8;
     }
     #v-mode-block Button.mode.on {
-        color: #ffffff;
+        color: #ffd766;
         text-style: bold;
     }
     #v-knobs {
         width: 100%;
-        height: 1fr;
+        height: auto;
         align: left top;
     }
     #v-readouts {
@@ -451,8 +491,17 @@ class VictusApp(App):
         margin-top: 0;
         height: auto;
     }
-    #v-readouts .readout {
-        margin-top: 1;
+    /* золотое свечение вентиляторов — тот же росчерк, что на «Подсветке» */
+    #vcontrol .slider-row AsciiSlider {
+        color: #f0c34f;
+    }
+    #vcontrol .num-input {
+        background: #171410;
+        color: #ffd766;
+    }
+    #vcontrol .num-input:focus {
+        background: #2a2210;
+        color: #fff2c8;
     }
 
     /* ---- status ---- */

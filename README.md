@@ -121,18 +121,23 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 `victus-kbd`, the palette comes from `victus_palette`, state is kept in
 `state/last_state.json`.
 
-- layout mirrors the **Fans** tab: the left **COLOR PICKER** panel opens
-  with `Cycle`/`Fade`/`Static` and the power switch under a divider, then
-  the four sliders, and a pinned bottom block with `Hex`, the big preview
-  and `Apply` · `Copy hex`; the right column stacks **Custom Effect
-  Creator** (live sine, 1fr) over **LIGHTING EFFECTS** (Effect Speed and
-  Start / Stop);
+- both tabs share one **dense layout**: every panel is packed top-down with
+  a single blank line between blocks, and whatever space is left becomes one
+  even band at the bottom of the panel (at the usual 110×31 window that band
+  is 1–2 rows, so nothing is clipped and nothing floats in the middle);
+- the left **COLOR PICKER** panel opens with `Cycle`/`Fade`/`Static` and the
+  power switch under a divider, then the sliders, and a bottom block with
+  `Hex`, the 10×5 preview and `Apply` · `Copy hex`; the right column stacks
+  **Custom Effect Creator** (live sine, 1fr — the wave fills the panel) over
+  **LIGHTING EFFECTS** (Effect Speed and Start / Stop);
 - the tab is painted in **golden glow**: gold panel frames and titles,
   gold slider bars, gold frame around the preview, gold `Apply` / `Start`
-  and a gold highlight on the Backlight tab;
-- four long ticked sliders — `Red`/`Green`/`Blue` (0…255) and `Shade`
-  (0…100: **0 = black, 50 = your color, 100 = white**), each with an exact
-  numeric box beside it: click it and type the value;
+  and a gold highlight on the active tab (the Fans tab is gold as well);
+- three long ticked sliders — `Red`/`Green`/`Blue` (0…255), each with an
+  exact numeric box beside it: click it and type the value — plus one
+  **thin white line under them, black ↔ white** (0 = black, 50 = your colour,
+  100 = white): one row, no label, no box — it is part of the panel, not a
+  separate control;
 - mouse input is rate-limited: drag refreshes at 60 Hz and wheel bursts
   (touchpad, smooth wheel) collapse into a few steps — the bar follows the
   pointer instead of lagging and jumping around;
@@ -144,8 +149,9 @@ The TUI is a **thin wrapper over the CLI**: every EC write goes through
 - `Apply` · `Copy hex`, status line;
 - **wave speed follows Effect Speed**: amplitude and period are lerped toward
   the target every 0.12 s, no jumps;
-- **calm mode**: after `Stop` the sine flattens into a straight coloured line
-  with a barely visible live wobble — the light never dims;
+- **calm mode**: after `Stop` the sine keeps its shape — it still fills the
+  Creator panel, but the colours stand still and the phase drifts very
+  slowly, so the light rests instead of going dark;
 - **smart permission probe** (`probe_access`): direct write / `sudo` / EC module
   missing — the hint matches what is actually broken;
 - **language button** in the title row: RU ↔ EN without restart;
@@ -169,30 +175,35 @@ is in charge of the blades, and what happens if something goes wrong.
 ### What you see
 
 ```
- CONTROL                      TELEMETRY
- [*] Manual                   CPU  61.0 °C max 99
- [ ] SMART                    GPU  55.0 °C 42 %
- [ ] BIOS Auto                VRM* board 48.2 °C
- ────────────────────────
- Right fan [███████░░░] 128   правый  2540 RPM PWM 128 50 %
- Left  fan [███████░░░] 128   левый   2410 RPM PWM 128 50 %
-                              MODE manual
- (top: modes and knobs,       SAFETY
-  bottom: target and ~RPM)    guard   CPU 99 · GPU 88 °C
- set 128/128                  smart   60..255 PWM
- ~1024 / 1024 RPM             emerg   CPU 93 · GPU 83 °C
-                              hold    180 PWM
-                              preset  victus-2026-09-30
-                              access  passwordless
- ──────────────────────────────────────────────────────────────────────
+ CONTROL (full width)
+ [*] Manual
+ [ ] SMART
+ [ ] BIOS Auto
+ ─────────────────────────────────────────────
+ Right fan [███████░░░] 128
+ Left  fan [███████░░░] 128
+ set 128/128
+ ~1024 / 1024 RPM
+ (leftover = one even band at the panel bottom)
+
+ TELEMETRY                      SAFETY
+ CPU  61.0 °C max 99            guard   CPU 99 · GPU 88 °C
+ GPU  55.0 °C 42 %              smart   60..255 PWM
+ VRM* board 48.2 °C             emerg   CPU 93 · GPU 83 °C
+ right  2540 RPM PWM 128 50 %   hold    180 PWM
+ left   2410 RPM PWM 128 50 %   preset  victus-2026-09-30
+ MODE manual                    access  passwordless
+ ─────────────────────────────────────────────
 status: SMART ▸ 128/140
 ```
 
 The knobs are the same widget as on the **Backlight** tab: a bar with a
 ruler underneath, drag / wheel / arrow keys, and an exact-number box beside
 it — type `128` and press Enter (or leave the box), the value is clamped to
-0..255 and written 0.4 s later, like the last drag step. The right column
-stacks two panels: telemetry on top, safety limits below.
+0..255 and written 0.4 s later, like the last drag step. The tab is one
+column: **CONTROL** takes the full width (modes, knobs, `set X/Y` and
+`~RPM`), and below it sit **TELEMETRY** and **SAFETY** side by side, both
+painted in the same gold as the Backlight tab.
 
 Telemetry is polled once a second and is **read-only, no root**: hwmon
 temperatures/RPM/PWM plus `nvidia-smi` (run in a worker thread — it can take

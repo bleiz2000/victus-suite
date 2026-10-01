@@ -1,9 +1,12 @@
 """Вкладка «vertil» — мониторинг и управление вентиляторами HP Victus.
 
-Стиль — тот же, что у вкладки «Подсветка»: слева главная панель УПРАВЛЕНИЕ
-(режимы сверху с линейкой-разделителем, ниже две «крутилки» в формате
-полоски с делениями + поле точного числа), справа узкая колонка из двух
-панелей — ТЕЛЕМЕТРИЯ и БЕЗОПАСНОСТЬ.
+Стиль — тот же, что у вкладки «Подсветка»: золотые рамки и заголовки
+панелей, золотые полоски крутилок, золотые поля чисел. Компоновка
+плотная: сверху во всю ширину УПРАВЛЕНИЕ (режимы с линейкой-разделителем,
+ниже две «крутилки» в формате полоски с делениями + поле точного числа,
+внизу цель и оценка оборотов), под ним ряд из двух панелей — ТЕЛЕМЕТРИЯ
+(широкая) и БЕЗОПАСНОСТЬ (узкая). Всё прижато вверх, пустое — ровной
+полосой у нижнего края панели управления, а не дырой посередине.
 
 Крутилки: `Right fan` / `Left fan` — PWM 0..255 (правый = CPU, pwm1/fan1,
 левый = GPU, pwm2/fan2), у каждой деления, клик/драг/колесо и поле, куда
@@ -135,9 +138,9 @@ class VertilTab(Vertical):
     # --- композиция ---------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="vbody"):
+        with Vertical(id="vbody"):
             yield from self._control_panel()
-            with Vertical(id="vside"):
+            with Horizontal(id="vpanels"):
                 yield from self._telemetry_panel()
                 yield from self._limits_panel()
         with Horizontal(id="vstatusline"):
@@ -640,7 +643,7 @@ class VertilTab(Vertical):
                   for sid in SLIDER_IDS]
         self.query_one("#v-target", Static).update(Text(
             "%s %s/%s" % (t("tui.vertil_target"), values[0], values[1]),
-            style="bold cyan"))
+            style="bold #ffd766"))
         self.query_one("#v-est", Static).update(Text(
             "~%s / %s RPM" % (est_rpm(values[0]), est_rpm(values[1])),
             style="dim"))

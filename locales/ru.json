@@ -69,7 +69,6 @@
   "tui.lab_r": "Красный",
   "tui.lab_g": "Зелёный",
   "tui.lab_b": "Синий",
-  "tui.lab_black": "Насыщенность",
   "tui.hex_label": "Hex",
   "tui.bad_hex": "не разобрать hex: {value}",
   "tui.bad_number": "не число: {value}",

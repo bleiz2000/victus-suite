@@ -2,21 +2,25 @@
 
 Слева  COLOR PICKER        — ровно как блок CONTROL у вентиляторов: сверху
                              режимы (Static/Cycle/Fade) и питание с линейкой-
-                             разделителем, ниже четыре полоски R / G / B
-                             (0..255) и «Насыщенность» (0 = чёрный, 50 =
-                             базовый цвет, 100 = белый) — у каждой деления и
-                             поле точного числа. Внизу блок ридаутов: поле HEX
-                             (живое превью, Enter применяет цвет), большое
-                             квадратное превью и кнопки Apply / Copy HEX —
+                             разделителем, ниже три полоски R / G / B
+                             (0..255, с делениями и полем точного числа) и
+                             тонкая белая линия чёрный↔белый (0 = чёрный,
+                             50 = базовый цвет, 100 = белый) — одна строка,
+                             без подписи и без поля: она часть интерфейса,
+                             а не отдельный «Шейд». Внизу блок ридаутов:
+                             поле HEX (живое превью, Enter применяет цвет),
+                             квадрат превью 10×5 и кнопки Apply / Copy HEX —
                              как «цель / ~RPM» у вентиляторов.
 Справа  колонка из двух     панелей: сверху Custom Effect Creator с живой
-                             синусоидой (1fr, как ТЕЛЕМЕТРИЯ), ниже LIGHTING
-                             EFFECTS — Effect Speed (с полем числа) и
-                             Start / Stop (auto, как БЕЗОПАСНОСТЬ).
+                             синусоидой (1fr — волна занимает панель целиком),
+                             ниже LIGHTING EFFECTS — Effect Speed (с полем
+                             числа) и Start / Stop (auto, как БЕЗОПАСНОСТЬ).
 
-Весь блок покрашен «золотым свечением»: золотые рамки и заголовки панелей,
-золотые полоски, золотая рамка превью и золотая кнопка Apply — подсветка
-должна читаться как свет, а не как серая таблица.
+Компоновка плотная: всё прижато вверх, между блоками ровно по строке,
+пустое — одной ровной полосой у нижнего края панели (на окне ~110×31
+её 1–2 строки). Весь блок покрашен «золотым свечением»: золотые рамки и
+заголовки панелей, золотые полоски, золотая рамка превью и золотая кнопка
+Apply — подсветка должна читаться как свет, а не как серая таблица.
 
 Вся запись на клавиатуру идёт через фоновый демон (bin/victusd) по unix-сокету;
 без демона TUI пишет напрямую через victus-kbd. Экран показывает ровно то, что
@@ -53,11 +57,11 @@ MODE_NAMES = {
 NAME_WIDTH = 10
 
 # Числовые поля рядом с полосками: id полоски → (min, max, as_float)
+# У тонкой линии темноты (black) поля нет — только полоска.
 NUMBER_FIELDS = {
     "r": (0, 255, False),
     "g": (0, 255, False),
     "b": (0, 255, False),
-    "black": (0, 100, False),
     "speed": (0.2, 5.0, True),
 }
 
@@ -193,7 +197,14 @@ class KbdTab(Vertical):
                 yield from self._value_row("r", t("tui.lab_r"), 0, 255)
                 yield from self._value_row("g", t("tui.lab_g"), 0, 255)
                 yield from self._value_row("b", t("tui.lab_b"), 0, 255)
-                yield from self._value_row("black", t("tui.lab_black"), 0, 100)
+                # тонкая линия темноты: одна строка, белая, без подписи и
+                # без поля числа — пустая подпись держит ту же выравнивание,
+                # что и у полосок выше
+                with Horizontal(classes="thin-row", id="row-black"):
+                    yield Label("", classes="slider-label")
+                    yield AsciiSlider(min=0, max=100, step=1,
+                                      value=int(self.black_depth),
+                                      id="black", ticks=False)
             with Horizontal(id="picker-bottom"):
                 yield Static("", id="preview")
                 with Vertical(id="bottom-right"):
@@ -346,10 +357,15 @@ class KbdTab(Vertical):
         st.styles.color = "#ff6b6b" if error else "#7ee787"
 
     def _set_value_text(self, sid, text):
-        """Обновить число рядом с полоской, не мешая тому, кто в него печатает."""
-        field = self.query_one(f"#{sid}-val", Input)
-        if not field.has_focus:
-            field.value = str(text)
+        """Обновить число рядом с полоской, не мешая тому, кто в него печатает.
+
+        У тонкой линии темноты поля нет — для неё просто нечего трогать.
+        """
+        nodes = self.query(f"#{sid}-val").nodes
+        field = next((n for n in nodes if isinstance(n, Input)), None)
+        if field is None or field.has_focus:
+            return
+        field.value = str(text)
 
     def _sync_controls(self):
         """Полоски, числовые поля, HEX и превью — по color / black_depth."""
@@ -554,8 +570,6 @@ class KbdTab(Vertical):
         """Текущее значение поля по id полоски (для отката и сравнений)."""
         if sid == "speed":
             return f"{self.speed:.1f}"
-        if sid == "black":
-            return str(int(self.black_depth))
         return str(int(self.color[{"r": 0, "g": 1, "b": 2}[sid]]))
 
     def _commit_number(self, field: Input):
@@ -589,13 +603,6 @@ class KbdTab(Vertical):
         if as_float:
             self.speed = float(text)
             self.query_one("#sine", SineWave).speed = self.speed
-            self._schedule_store()
-            if self.running:
-                self.run_worker(self._store_now(), exclusive=False)
-            return
-        if sid == "black":
-            self.black_depth = int(text)
-            self._sync_controls()
             self._schedule_store()
             if self.running:
                 self.run_worker(self._store_now(), exclusive=False)

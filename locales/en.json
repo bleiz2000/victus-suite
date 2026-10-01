@@ -69,7 +69,6 @@
   "tui.lab_r": "Red",
   "tui.lab_g": "Green",
   "tui.lab_b": "Blue",
-  "tui.lab_black": "Shade",
   "tui.hex_label": "Hex",
   "tui.bad_hex": "cannot parse hex: {value}",
   "tui.bad_number": "not a number: {value}",

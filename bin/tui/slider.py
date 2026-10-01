@@ -2,10 +2,11 @@
 
 В Textual 8.2.8 нет виджета Slider, поэтому ползунок рисуем сами.
 
-AsciiSlider  `[======== ]`  — клик/драг мышью, колесо, ← →, Home/End.
-             ALLOW_SELECT=False: клик двигает ползунок, а не выделяет текст.
-             ticks=True — вторая строка с делениями (риски каждые 10% и
-             подписи краёв/середины): видно, куда ведёт ползунок.
+    AsciiSlider  `[████░░░░ ]` — клик/драг мышью, колесо, ← →, Home/End.
+              ALLOW_SELECT=False: клик двигает ползунок, а не выделяет текст.
+              ticks=True — вторая строка с делениями (риски каждые 10% и
+              подписи краёв/середины): видно, куда ведёт ползунок; без
+              делений полоска — ровно одна строка (тонкая линия темноты).
 
 SineWave     сглаженная синусоида (9 подуровней высоты внутри ячейки),
              живая анимация, скорость = Effect Speed.
@@ -33,7 +34,7 @@ WHEEL_BACKLOG = 10.0  # потолок «долга» колеса в шагах
 
 
 class AsciiSlider(Widget):
-    """Полоса `[==== ]`: значение 0..max, ширина = доступное место.
+    """Полоса `[████░░░░]`: значение 0..max, ширина = доступное место.
 
     ticks=True рисует вторую строку — линейку с делениями каждые 10%
     и подписями min/середина/max; такая полоска занимает 2 строки (CSS).
@@ -111,12 +112,8 @@ class AsciiSlider(Widget):
         filled = max(0, min(inner, round(self.fraction * inner)))
         text = Text()
         text.append("[", style="dim")
-        if self.ticks:
-            text.append("█" * filled, style="bold")
-            text.append("░" * (inner - filled))
-        else:
-            text.append("=" * filled, style="bold")
-            text.append(" " * (inner - filled))
+        text.append("█" * filled, style="bold")
+        text.append("░" * (inner - filled))
         text.append("]", style="dim")
         if self.ticks:
             text.append("\n")
@@ -393,10 +390,11 @@ class SineWave(Widget):
             self._start_flow()
 
     def set_calm(self, enabled: bool) -> None:
-        """Спокойный режим: мелкие ровные колыхания без переливов.
+        """Спокойный режим: та же волна, но без переливов и налегке.
 
-        Включается, когда эффект выключен — волна не замирает, но и не
-        «кипит»: амплитуда и скорость фазы плавно уходят к мягкой базе.
+        Включается, когда эффект выключен — форма остаётся (иначе панель
+        синусоиды выглядит пустой), но цвета стоят на месте, а амплитуда
+        и скорость фазы плавно уходят к мягкой базе.
         """
         self._calm = bool(enabled)
         self._energy_target = 0.0 if self._calm else 1.0
@@ -515,9 +513,11 @@ class SineWave(Widget):
             # вырождается в линию без █
             amp = max(amp, (int(mid) + 2) - mid + 0.5)
         else:
-            # покой: почти плоско, но ростка хватает, чтобы вершина чуть
-            # выходила за ось — видно, что линия живая, а не зависшая
-            amp = max(amp, 0.55)
+            # покой: форма статична и цвета не переливаются, но волна
+            # занимает панель — иначе высокий блок Custom Effect Creator
+            # (1fr, ~15 строк) выглядит пустым; фаза ползёт медленно,
+            # так что покой читается как спокойный, а не как выключенный
+            amp = max(amp, 0.55, mid * 0.6)
         period = self.period if self.period >= 4.0 else float(width) / self._period_div
         rows = [[" "] * width for _ in range(body_h)]
         styles = [[None] * width for _ in range(body_h)]
