@@ -274,12 +274,24 @@ class VictusApp(App):
         height: 1;
         padding: 0 1;
     }
+    /* .switch--slider = и дорожка, и «головка» внутри неё: цвет — головка,
+       фон — дорожка. Выключено — тусклое, включено — сплошное золото с
+       тёмной головкой, чтобы щелчок было видно с первого взгляда. */
     #pwr-switch .switch--slider {
-        color: #6a6a6a;
-        background: #1c1c1c;
+        color: #8a8a8a;
+        background: #242424;
     }
     #pwr-switch.-on .switch--slider {
-        color: #ffd766;
+        color: #0d1117;
+        background: #ffd766;
+    }
+    #pwr-switch:hover .switch--slider {
+        color: #d0d0d0;
+        background: #303030;
+    }
+    #pwr-switch:hover.-on .switch--slider {
+        color: #0d1117;
+        background: #ffe28a;
     }
     #pwr-switch:disabled {
         opacity: 0.45;

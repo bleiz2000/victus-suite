@@ -124,8 +124,8 @@
   "tui.tab_pwr": "Power",
   "tui.sec_power": "POWER",
   "tui.pwr_typewriter": "Typewriter",
-  "tui.pwr_hint_off": "quiet laptop: clocks and dGPU damped, 60 Hz, quiet fans",
-  "tui.pwr_hint_on": "full power: turbo, PL1 55 W, 144 Hz, curve-controlled fans",
+  "tui.pwr_hint_typewriter": "quiet laptop: clocks and dGPU damped, 60 Hz, quiet fans",
+  "tui.pwr_hint_full": "full power: turbo, PL1 55 W, 144 Hz, curve-controlled fans",
   "tui.pwr_profile": "Profile",
   "tui.pwr_cpu": "CPU",
   "tui.pwr_screen": "Screen",
@@ -152,5 +152,8 @@
   "tui.pwr_turbo_off": "off",
   "tui.pwr_hz": "{n} Hz",
   "tui.pwr_gpu_limit": "limit {n} W",
-  "tui.vertil_by_power": "fans are driven by the power mode"
+  "tui.vertil_by_power": "fans are driven by the power mode",
+  "tui.pwr_dur": "{h} h {m} min",
+  "tui.pwr_dur_min": "{m} min",
+  "tui.pwr_dur_days": "{d} d {h} h"
 }

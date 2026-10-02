@@ -46,6 +46,18 @@ MODE_CLASSES = {
 }
 
 
+def _fmt_dur(hours) -> str:
+    """3.22 → «3 ч 13 мин»; 0.4 → «24 мин»; 61 → «2 дн 13 ч»."""
+    if hours is None or hours <= 0:
+        return "-"
+    total = int(round(hours * 60))
+    if hours >= 48:
+        return t("tui.pwr_dur_days", d=total // 1440, h=(total % 1440) // 60)
+    if hours < 1:
+        return t("tui.pwr_dur_min", m=max(1, total))
+    return t("tui.pwr_dur", h=total // 60, m=total % 60)
+
+
 def _fmt_hz(hz) -> str:
     try:
         hz = float(hz)
@@ -88,7 +100,8 @@ class PowerTab(Vertical):
                 yield Static("", id="pstatus")
 
     def _hint(self) -> str:
-        return t("tui.pwr_hint_on") if self.typewriter else t("tui.pwr_hint_off")
+        return (t("tui.pwr_hint_typewriter") if self.typewriter
+                else t("tui.pwr_hint_full"))
 
     # --- старт --------------------------------------------------------------
 
@@ -140,9 +153,13 @@ class PowerTab(Vertical):
         if not self._busy and sw.value != on:
             sw.value = on
 
+        # раньше тут стояли ключи hint_on/hint_off «наоборот»: чип гордо
+        # показывал ВКЛ, а подпись под ним — «полная мощность, турбо, 144 Гц»
+        # при реальных 15 Вт и 60 Гц
         self.query_one("#pwr-hint", Static).update(Text(
-            t("tui.pwr_hint_on") if mode == power_core.MODE_TYPEWRITER
-            else t("tui.pwr_hint_off")))
+            t("tui.pwr_hint_typewriter")
+            if mode == power_core.MODE_TYPEWRITER
+            else t("tui.pwr_hint_full")))
         self._render_lines(self._st)
 
         # состояние на диске должно отражать железо, а не последний клик
@@ -261,11 +278,21 @@ class PowerTab(Vertical):
                        "%s · %s/%s RPM" % (fans.get("mode_name") or "-",
                                            fans.get("fan1") or "-",
                                            fans.get("fan2") or "-")),
-            self._line(t("tui.pwr_bat"),
-                       "%s%% · %s" % (bat.get("capacity") or "-",
-                                      bat.get("status") or "-")),
+            self._line(t("tui.pwr_bat"), self._battery_line(bat)),
         ]
         widget.update(self._join(lines))
+
+    @staticmethod
+    def _battery_line(bat: dict) -> str:
+        """100% · Discharging · 14.7 Вт · ≈ 3 ч 13 мин — измеренное."""
+        parts = ["%s%%" % (bat.get("capacity") or "-"),
+                 bat.get("status") or "-"]
+        if bat.get("watts"):
+            parts.append(t("tui.pwr_watts", n=("%.1f" % bat["watts"])
+                           .rstrip("0").rstrip(".")))
+        if bat.get("hours"):
+            parts.append("≈ " + _fmt_dur(bat["hours"]))
+        return " · ".join(parts)
 
     @staticmethod
     def _line(label: str, value: str) -> Text:

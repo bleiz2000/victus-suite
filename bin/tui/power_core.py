@@ -43,13 +43,22 @@ def run(argv, timeout=8.0):
 
 
 def _json(argv, timeout=8.0):
+    """(данные, ошибка). stdout разбирается ПЕРЕД проверкой кода возврата.
+
+    victus-power отдаёт rc=1 вместе с валидным JSON, когда сам честно
+    сообщил об ошибке (отказ снимать baseline, частичный apply). Если
+    сначала смотреть на rc, вызывающий код получит килобайт JSON вместо
+    смысла — так в статусе и появилась строка
+    «failed: точка отката — {"mode": "snapshot", …}».
+    """
     rc, out, err = run(argv, timeout)
-    if rc != 0:
-        return None, err.strip() or out.strip() or "rc=%s" % rc
     try:
         return json.loads(out), ""
     except ValueError:
-        return None, "не JSON: %s" % out.strip()[:120]
+        pass
+    if rc != 0:
+        return None, err.strip() or out.strip() or "rc=%s" % rc
+    return None, "не JSON: %s" % out.strip()[:120]
 
 
 # ------------------------------------------------------------------ железо
@@ -140,7 +149,22 @@ def ppd_set(name: str) -> bool:
     return rc == 0
 
 
+def _num(info: dict, key: str, scale: float):
+    """Число из sysfs-файла питания (µWh/µW/µA/µV → базовые единицы)."""
+    try:
+        return float(str(info.get(key) or "").split()[0]) / scale
+    except (ValueError, TypeError, IndexError):
+        return None
+
+
 def battery() -> dict:
+    """Заряд + сколько он продержит при ТЕКУЩЕМ расходе.
+
+    Оценка честная и живая: fuel-gauge отдаёт energy_now и мгновенную
+    мощность, поэтому цифра сама подстраивается под нагрузку — браузер,
+    сборка, звук. Это ровно ответ на «сколько продержит на этом режиме»,
+    только измеренный, а не придуманный.
+    """
     base = "/sys/class/power_supply"
     info = {"present": False}
     try:
@@ -152,13 +176,32 @@ def battery() -> dict:
             continue
         d = os.path.join(base, name)
         info["present"] = True
-        for key, fn in (("status", "status"), ("capacity", "capacity")):
+        for key in ("status", "capacity", "energy_now", "energy_full",
+                    "power_now", "current_now", "voltage_now"):
             try:
-                with open(os.path.join(d, fn)) as fh:
+                with open(os.path.join(d, key)) as fh:
                     info[key] = fh.read().strip()
             except OSError:
                 pass
         break
+
+    wh = _num(info, "energy_now", 1e6)              # µWh → Вт·ч
+    full = _num(info, "energy_full", 1e6)
+    w = _num(info, "power_now", 1e6)                # µW → Вт
+    if not w:
+        cur, vol = _num(info, "current_now", 1e6), _num(info, "voltage_now", 1e6)
+        if cur and vol:
+            w = cur * vol                            # fallback: A × V
+    info["watts"] = round(w, 1) if w else None
+
+    status = (info.get("status") or "").lower()
+    hours = None
+    if wh and w and w > 0:
+        if "discharg" in status:
+            hours = wh / w                           # сколько ещё хватит
+        elif "charg" in status and full:
+            hours = max(0.0, full - wh) / w          # сколько до полного
+    info["hours"] = round(hours, 2) if hours and hours > 0.02 else None
     return info
 
 
