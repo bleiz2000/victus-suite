@@ -128,7 +128,7 @@ class Sensors:
             "fan1": _read(os.path.join(self.hp, "fan1_input")),
             "fan2": _read(os.path.join(self.hp, "fan2_input")),
             "pwm1": _read(os.path.join(self.hp, "pwm1")),
-            "pwm2": _read(os.path.join(self.hp, "pwm2")),
+            "pwm2": _read(os.path.join(self.hp, "pwm2")) or _read(os.path.join(self.hp, "pwm1")),
             "mode": _read(os.path.join(self.hp, "pwm1_enable")),
             "gpu_util": g_u,
             "gpu_clk": g_c,
@@ -158,16 +158,13 @@ def clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
-def write_pwm(hp, p1, p2):
-    try:
-        with open(os.path.join(hp, "pwm1"), "w") as fh:
-            fh.write("%d\n" % p1)
-        with open(os.path.join(hp, "pwm2"), "w") as fh:
-            fh.write("%d\n" % p2)
-        return True
-    except OSError as e:
-        print("write_pwm failed: %s" % e, file=sys.stderr)
+def write_pwm(fans, p1, p2):
+    """Запись через fanlib: он знает про одноканальный PWM (нет pwm2)."""
+    err = fans.set_pwm(p1, p2)
+    if err:
+        print("write_pwm failed: %s" % err, file=sys.stderr)
         return False
+    return True
 
 
 def main():
@@ -183,6 +180,10 @@ def main():
     hp = sensors.hp
 
     preset = F.load_preset()
+    fans = F.Fans(preset)
+    if not fans.available:
+        print("hp hwmon не найден", file=sys.stderr)
+        return 2
     ctrl = None
     if a.phase == 2:
         ctrl = F.Brutal(preset)
@@ -191,16 +192,18 @@ def main():
 
     if a.phase > 1:
         # переход AUTO -> MANUAL: драйвер снапшотит текущий RPM, скачка нет
-        try:
-            with open(os.path.join(hp, "pwm1_enable"), "w") as fh:
-                fh.write("1\n")
-        except OSError as e:
-            print("cannot enter MANUAL: %s" % e, file=sys.stderr)
+        if not fans.writable:
+            print("нет прав на запись — запускайте от root", file=sys.stderr)
+            return 2
+        err = fans.enter_manual() or fans.set_mode(1)
+        if err:
+            print("cannot enter MANUAL: %s" % err, file=sys.stderr)
             return 2
         time.sleep(1.0)
 
-    print("phase=%d duration=%.1f min out=%s mode=%s"
-          % (a.phase, a.minutes, a.out, _read(os.path.join(hp, "pwm1_enable"))), flush=True)
+    print("phase=%d duration=%.1f min out=%s mode=%s shared_pwm=%s"
+          % (a.phase, a.minutes, a.out, _read(os.path.join(hp, "pwm1_enable")),
+             fans.shared_pwm), flush=True)
 
     end = time.monotonic() + a.minutes * 60.0
     t0 = time.monotonic()
@@ -225,7 +228,7 @@ def main():
             changed = False
             if ctrl is not None:
                 tgt1, tgt2, action, changed = ctrl.update(s, dt)
-                if changed and not write_pwm(hp, tgt1, tgt2):
+                if changed and not write_pwm(fans, tgt1, tgt2):
                     action += " [WRITE FAILED]"
 
             row = {
@@ -266,7 +269,7 @@ def main():
 
     fh.close()
     if ctrl is not None:
-        write_pwm(hp, a.exit_pwm, a.exit_pwm)
+        write_pwm(fans, a.exit_pwm, a.exit_pwm)
         print("exit handoff pwm=%d (mode=%s)" % (a.exit_pwm, _read(os.path.join(hp, "pwm1_enable"))),
               flush=True)
     print("phase %d done: %d rows -> %s" % (a.phase, n, a.out), flush=True)

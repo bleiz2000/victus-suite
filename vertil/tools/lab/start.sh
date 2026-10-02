@@ -21,5 +21,18 @@ echo $! > loadgen.pid
 sleep 3
 
 echo "loadgen pid=$(cat loadgen.pid) state=$(cat loadgen.state 2>/dev/null)"
-echo "pkg=$(($(cat /sys/class/hwmon/hwmon7/temp1_input)/1000))C gpu=$(nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv,noheader,nounits) rpm=$(cat /sys/class/hwmon/hwmon5/fan1_input)/$(cat /sys/class/hwmon/hwmon5/fan2_input) mode=$(cat /sys/class/hwmon/hwmon5/pwm1_enable) pkg_thr=$(cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count)"
+
+# hwmonN меняется после ребута/перезагрузки модулей — ищем по имени чипа
+HP=""; CORE=""
+for d in /sys/class/hwmon/hwmon*; do
+    case "$(cat "$d/name" 2>/dev/null)" in
+        hp) HP="$d" ;;
+        coretemp) CORE="$d" ;;
+    esac
+done
+PKG="-"
+[ -n "$CORE" ] && PKG="$(($(cat "$CORE/temp1_input" 2>/dev/null || echo 0)/1000))"
+RPM="-"
+[ -n "$HP" ] && RPM="$(cat "$HP/fan1_input")/$(cat "$HP/fan2_input") mode=$(cat "$HP/pwm1_enable")"
+echo "pkg=${PKG}C gpu=$(nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv,noheader,nounits 2>/dev/null) rpm=$RPM pkg_thr=$(cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count 2>/dev/null)"
 date +%T

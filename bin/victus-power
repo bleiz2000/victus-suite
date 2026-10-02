@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""victus-power — root-хелпер режимов питания victus-suite.
+
+Один узкий вход в права: sudoers даёт NOPASSWD только на этот файл, поэтому
+команды жёстко белый-листятся (никакого shell, никаких произвольных путей).
+
+Команды:
+    victus-power status [--json]     прочитать все ручки (read-only)
+    victus-power apply typewriter    режим «Печатная машинка» (сохраняя прошлое)
+    victus-power restore             вернуть снимок, сделанный перед apply
+    victus-power mux <hybrid|discrete>  явное переключение MUX (нужен reboot)
+
+Снимок прошлого состояния: /var/lib/victus-suite/power-state.json
+Всё, что не поддерживается прошивкой/драйвером, пропускается с пометкой —
+режим обязан работать на машине без единой ошибки «файл не найден».
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+
+TOOL = "victus-power"
+STATE_DIR = "/var/lib/victus-suite"
+STATE_FILE = os.path.join(STATE_DIR, "power-state.json")
+
+PLATFORM_PROFILE = "/sys/firmware/acpi/platform_profile"
+PSTATE_DIR = "/sys/devices/system/cpu/intel_pstate"
+RAPL = "/sys/class/powercap/intel-rapl:0"
+DGPU_PCI = "0000:01:00.0"
+HPWMI = "/sys/devices/platform/hp-wmi"
+MUX_PATH = os.path.join(HPWMI, "gpu_mux_mode")
+
+# «Печатная машинка»: значение каждого ручка. Отсутствующие пути = skip.
+TYPEWRITER = {
+    "platform_profile": ("path", PLATFORM_PROFILE, "low-power"),
+    "no_turbo": ("path", os.path.join(PSTATE_DIR, "no_turbo"), "1"),
+    "max_perf_pct": ("path", os.path.join(PSTATE_DIR, "max_perf_pct"), "40"),
+    "rapl_pl1": ("path", os.path.join(RAPL, "constraint_0_power_limit_uw"),
+                 "15000000"),
+    "rapl_pl2": ("path", os.path.join(RAPL, "constraint_1_power_limit_uw"),
+                 "30000000"),
+    "dgpu_runtime": ("path", "/sys/bus/pci/devices/%s/power/control" % DGPU_PCI,
+                     "auto"),
+    # hybrid = iGPU рисует десктоп, dGPU только по запросу — максимум экономии
+    "mux": ("path", MUX_PATH, "0"),
+}
+# ручки, которые повторяются на каждое ядро CPU
+PER_CPU = (
+    ("governor", "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor",
+     "powersave"),
+    ("epp", "/sys/devices/system/cpu/cpu%d/cpufreq/energy_performance_preference",
+     "power"),
+)
+# минимальный PL2, ниже которого BIOS уже не опускается
+NVIDIA_PL_MIN_W = 20
+
+
+def read(path: str):
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def write(path: str, value: str):
+    """Возвращает None при успехе, текст ошибки — при провале."""
+    if not os.path.exists(path):
+        return "нет файла %s" % path
+    try:
+        with open(path, "w") as fh:
+            fh.write(value + "\n")
+    except OSError as exc:
+        return "%s: %s" % (path, exc.strerror or exc)
+    got = read(path)
+    if got is not None and got != value:
+        return "%s: прошивка отклонила %s (осталось %s)" % (path, value, got)
+    return None
+
+
+def cpu_ids() -> list[int]:
+    ids = []
+    for p in sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*")):
+        tail = os.path.basename(p)[3:]
+        if tail.isdigit():
+            ids.append(int(tail))
+    return ids
+
+
+def nvidia(args: list[str], timeout: float = 8.0):
+    """Запуск nvidia-smi без shell; (rc, stdout) либо (None, причина)."""
+    import shutil
+    if not shutil.which("nvidia-smi"):
+        return None, "nvidia-smi отсутствует"
+    try:
+        r = subprocess.run(["nvidia-smi"] + args, capture_output=True,
+                           text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    return r.returncode, (r.stdout or r.stderr or "").strip()
+
+
+def _nvidia_limits() -> dict:
+    """power.limit на выключенной дискретке отдаёт N/A — не верим вслепую."""
+    rc, out = nvidia(["--query-gpu=power.limit,power.max_limit,persistence_mode",
+                      "--format=csv,noheader,nounits"])
+    res = {}
+    if rc != 0 or not out:
+        return res
+    parts = [p.strip() for p in out.split(",")]
+    for key, raw in (("power_limit", parts[0] if parts else None),
+                     ("max_limit", parts[1] if len(parts) > 1 else None),
+                     ("persistence_mode", parts[2] if len(parts) > 2 else None)):
+        if raw is None:
+            continue
+        if key.endswith("limit"):
+            try:
+                res[key] = "%.1f" % float(raw.split()[0])
+            except (ValueError, IndexError):
+                pass
+        elif raw and raw.lower() != "n/a":
+            res[key] = raw
+    # откатываемся на предел, если текущий неизвестен
+    if "power_limit" not in res and "max_limit" in res:
+        res["power_limit"] = res["max_limit"]
+    return res
+
+
+# ------------------------------------------------------------------ snapshot
+def snapshot() -> dict:
+    """Текущее состояние всех ручков — для корректного отката."""
+    snap = {"ts": time.time(), "knobs": {}, "per_cpu": {}, "nvidia": {}}
+    for name, (_kind, path, _val) in TYPEWRITER.items():
+        snap["knobs"][name] = read(path)
+    for name, tmpl, _val in PER_CPU:
+        snap["per_cpu"][name] = {
+            "template": tmpl,
+            "values": {str(i): read(tmpl % i) for i in cpu_ids()},
+        }
+    snap["nvidia"] = _nvidia_limits()
+    return snap
+
+
+def save_snapshot() -> dict:
+    snap = snapshot()
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(snap, fh, ensure_ascii=False, indent=2)
+        os.chmod(STATE_FILE, 0o600)
+    except OSError as exc:
+        print("%s: не смог сохранить снимок: %s" % (TOOL, exc), file=sys.stderr)
+    return snap
+
+
+def snapshot_now() -> dict:
+    """Явно зафиксировать текущее состояние как точку отката.
+
+    Нужен ОТДЕЛЬНОЙ командой: power-profiles-daemon меняет platform_profile и
+    EPP сам, поэтому снимок обязан быть сделан ДО первого изменения, а не в
+    момент apply (иначе в точку отката попадает уже «печатная машинка»).
+    """
+    snap = save_snapshot()
+    return {"mode": "snapshot", "applied": ["точка отката сохранена"],
+            "skipped": [], "failed": [], "knobs": snap.get("knobs")}
+
+
+def load_snapshot():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+# -------------------------------------------------------------------- actions
+def apply_typewriter() -> dict:
+    res = {"mode": "typewriter", "applied": [], "skipped": [],
+           "failed": [], "restorable": True}
+    targets = []                # (имя, путь, значение) — проверим после записи
+
+    # Точка отката — состояние ДО первого включения. Повторный apply не должен
+    # её затирать, иначе restore вернёт уже изменённые значения (low-power и т.п.)
+    if load_snapshot() is None:
+        snap = save_snapshot()
+    else:
+        snap = load_snapshot()
+
+    for name, (_kind, path, value) in TYPEWRITER.items():
+        cur = read(path)
+        if cur is None:
+            res["skipped"].append("%s: нет %s" % (name, path))
+            continue
+        if cur == value:
+            res["applied"].append("%s=%s (уже так)" % (name, value))
+            continue
+        err = write(path, value)
+        if err:
+            res["failed"].append("%s: %s" % (name, err))
+        else:
+            res["applied"].append("%s=%s" % (name, value))
+            targets.append((name, path, value))
+
+    for name, tmpl, value in PER_CPU:
+        ids = cpu_ids()
+        if not ids:
+            res["skipped"].append("%s: нет cpu*/cpufreq" % name)
+            continue
+        ok = bad = 0
+        for i in ids:
+            path = tmpl % i
+            if read(path) is None:
+                continue
+            err = write(path, value)
+            if err:
+                bad += 1
+            else:
+                ok += 1
+                targets.append(("%s[cpu%d]" % (name, i), path, value))
+        if ok:
+            res["applied"].append("%s=%s (%d cpu)" % (name, value, ok))
+        if bad:
+            res["failed"].append("%s: %d ядер отказали" % (name, bad))
+        if not ok and not bad:
+            res["skipped"].append("%s: нет %s" % (name, tmpl % 0))
+
+    # NVIDIA: persistence off + потолок мощности (дискретка уходит в сон,
+    # а если проснётся — ей разрешено только %d Вт)
+    saved = (snap.get("nvidia") or {})
+    rc, out = nvidia(["-pm", "0"])
+    if rc is None:
+        res["skipped"].append("nvidia: нет nvidia-smi")
+    elif rc != 0 or _nvidia_warn(out):
+        res["failed"].append("nvidia: не смог выключить persistence mode (%s)"
+                             % (out or "rc=%s" % rc).strip()[:80])
+    else:
+        res["applied"].append("nvidia persistence=0")
+    try:
+        cur_pl = float((saved.get("power_limit") or "0").split()[0])
+    except (ValueError, AttributeError, IndexError):
+        cur_pl = 0.0
+    target = min(cur_pl, NVIDIA_PL_MIN_W) or NVIDIA_PL_MIN_W
+    rc, out = nvidia(["-pl", "%.1f" % target])
+    if rc is None:
+        pass
+    elif rc != 0 or _nvidia_warn(out):
+        # драйвер отвечает rc=0 и текстом «not supported» — это не успех
+        res["skipped"].append("nvidia -pl: %s"
+                              % ((out or "отказ").strip().splitlines()[:1]) [0][:90])
+    else:
+        res["applied"].append("nvidia power_limit=%.0fW" % target)
+
+    # EC имеет право перетереть наши записи (platform_profile, например,
+    # возвращает RAPL к своим 55 Вт) — перечитываем и честно рапортуем.
+    if targets:
+        time.sleep(1.0)
+        for name, path, value in targets:
+            got = read(path)
+            if got != value:
+                res["applied"] = [a for a in res["applied"]
+                                  if not a.startswith(name.split("[")[0] + "=")]
+                res["failed"].append("%s: прошивка откатила %s (вернулось %s)"
+                                     % (name, value, got))
+
+    res["snapshot"] = bool(snap)
+    res["dgpu_runtime"] = read(
+        "/sys/bus/pci/devices/%s/power/runtime_status" % DGPU_PCI)
+    return res
+
+
+def _nvidia_warn(out) -> bool:
+    """nvidia-smi возвращает rc=0 даже когда ничего не сделал."""
+    text = (out or "").lower()
+    return any(s in text for s in ("not supported", "not supported for",
+                                   "[n/a]", "invalid", "failed"))
+
+
+def restore() -> dict:
+    snap = load_snapshot()
+    if not snap:
+        return {"mode": "restore", "applied": [], "skipped": [],
+                "failed": ["снимок %s не найден — откатывать нечего"
+                           % STATE_FILE]}
+    res = {"mode": "restore", "applied": [], "skipped": [], "failed": []}
+
+    # сначала мульти-ядерные (у них шаблон в снимке), потом одиночные
+    for name, data in (snap.get("per_cpu") or {}).items():
+        tmpl = data.get("template")
+        for idx, val in (data.get("values") or {}).items():
+            if not tmpl or val is None:
+                continue
+            path = tmpl % int(idx)
+            if read(path) is None:
+                res["skipped"].append(path)
+                continue
+            if read(path) == val:
+                continue            # уже в прошлом состоянии — не дёргаем прошивку
+            err = write(path, val)
+            (res["failed"] if err else res["applied"]).append(
+                "%s=%s" % (path, val) if not err else err)
+
+    saved_knobs = snap.get("knobs") or {}
+    for name, (_kind, path, _val) in TYPEWRITER.items():
+        val = saved_knobs.get(name)
+        if val is None:
+            res["skipped"].append("%s: в снимке пусто" % name)
+            continue
+        if read(path) is None:
+            res["skipped"].append("%s: нет %s" % (name, path))
+            continue
+        if read(path) == val:
+            continue                # MUX, например, отдаёт EINVAL на тот же бит
+        err = write(path, val)
+        (res["failed"] if err else res["applied"]).append(
+            "%s=%s" % (name, val) if not err else err)
+
+    nv = snap.get("nvidia") or {}
+    cur = _nvidia_limits()
+    if nv.get("power_limit") and cur.get("power_limit") != nv["power_limit"]:
+        rc, out = nvidia(["-pl", str(nv["power_limit"])])
+        if rc == 0:
+            res["applied"].append("nvidia power_limit=%s" % nv["power_limit"])
+        elif rc is not None:
+            res["failed"].append("nvidia -pl: %s" % (out or "отказ"))
+    if nv.get("persistence_mode") and \
+            nv["persistence_mode"].lower() != (cur.get("persistence_mode") or "").lower():
+        want_on = nv["persistence_mode"].lower().startswith("e")
+        rc, out = nvidia(["-pm", "1" if want_on else "0"])
+        if rc == 0:
+            res["applied"].append("nvidia persistence=%s" % nv["persistence_mode"])
+        elif rc is not None:
+            res["failed"].append("nvidia -pm: %s" % (out or "отказ"))
+
+    try:
+        os.remove(STATE_FILE)
+    except OSError:
+        pass
+    return res
+
+
+def mux_set(mode: str) -> dict:
+    """MUX: hybrid=0, discrete=1. Переключение подтверждается только
+    после перезагрузки (прошивка), поэтому мы лишь выставляем бит."""
+    val = {"hybrid": "0", "discrete": "1"}[mode]
+    cur = read(MUX_PATH)
+    if cur is None:
+        return {"mode": "mux", "failed": ["нет %s" % MUX_PATH],
+                "applied": [], "skipped": []}
+    if cur == val:
+        return {"mode": "mux", "applied": ["mux уже %s" % mode],
+                "skipped": [], "failed": [], "reboot_required": False}
+    err = write(MUX_PATH, val)
+    if err:
+        return {"mode": "mux", "failed": [err], "applied": [], "skipped": []}
+    return {"mode": "mux", "applied": ["mux=%s (%s)" % (mode, val)],
+            "skipped": [], "failed": [], "reboot_required": True}
+
+
+def status() -> dict:
+    st = {"tool": TOOL, "euid": os.geteuid()}
+    st["platform_profile"] = read(PLATFORM_PROFILE)
+    st["platform_profile_choices"] = read(PLATFORM_PROFILE + "_choices")
+    st["no_turbo"] = read(os.path.join(PSTATE_DIR, "no_turbo"))
+    st["max_perf_pct"] = read(os.path.join(PSTATE_DIR, "max_perf_pct"))
+    st["pstate_status"] = read(os.path.join(PSTATE_DIR, "status"))
+    st["governor"] = read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+    st["epp"] = read(
+        "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")
+    st["rapl_pl1_w"] = _watts(read(os.path.join(RAPL, "constraint_0_power_limit_uw")))
+    st["rapl_pl2_w"] = _watts(read(os.path.join(RAPL, "constraint_1_power_limit_uw")))
+    st["dgpu_control"] = read(
+        "/sys/bus/pci/devices/%s/power/control" % DGPU_PCI)
+    st["dgpu_runtime"] = read(
+        "/sys/bus/pci/devices/%s/power/runtime_status" % DGPU_PCI)
+    st["mux"] = read(MUX_PATH)
+    nv = _nvidia_limits()
+    st["nvidia_pl_w"] = _watts(nv.get("power_limit"))
+    st["nvidia_persistence"] = nv.get("persistence_mode")
+    rc, out = nvidia(["--query-gpu=temperature.gpu",
+                      "--format=csv,noheader,nounits"])
+    st["nvidia_temp"] = out.strip() if rc == 0 and out else None
+    st["typewriter_saved"] = load_snapshot() is not None
+    return st
+
+
+def _watts(v):
+    try:
+        return round(float(v) / 1e6, 1) if v and float(v) > 1000 else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def emit(res: dict, as_json: bool) -> int:
+    if as_json:
+        print(json.dumps(res, ensure_ascii=False))
+    else:
+        for key in ("applied", "skipped", "failed"):
+            for line in res.get(key) or []:
+                mark = {"applied": "+", "skipped": "-", "failed": "!"}[key]
+                print(" %s %s" % (mark, line))
+        if res.get("reboot_required"):
+            print(" ! требуется перезагрузка")
+        print("%s: %s" % (res.get("mode", "ok"),
+                          "ошибок=%d" % len(res.get("failed") or [])))
+    return 1 if res.get("failed") else 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog=TOOL, add_help=True)
+    # --json живёт и сверху, и в каждой подкоманде: иначе
+    # `victus-power status --json` argparse отвергает (общий флаг после подкоманды)
+    common = argparse.ArgumentParser(add_help=False)
+    # SUPPRESS: иначе подкоманда своим default=False затирает флаг верхнего уровня
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="вывод JSON")
+    ap.add_argument("--json", action="store_true", help="вывод JSON")
+    sub = ap.add_subparsers(dest="cmd")
+
+    sub.add_parser("status", parents=[common])
+    sub.add_parser("restore", parents=[common])
+    sub.add_parser("snapshot", parents=[common])
+    p_apply = sub.add_parser("apply", parents=[common])
+    p_apply.add_argument("mode", choices=["typewriter"])
+    p_mux = sub.add_parser("mux", parents=[common])
+    p_mux.add_argument("mode", choices=["hybrid", "discrete"])
+
+    a = ap.parse_args(argv)
+
+    if os.geteuid() != 0:
+        print("%s: нужен root (sudo)" % TOOL, file=sys.stderr)
+        return 2
+
+    if a.cmd == "status":
+        st = status()
+        if a.json:
+            print(json.dumps(st, ensure_ascii=False))
+        else:
+            for k, v in st.items():
+                print("%-24s %s" % (k, v))
+        return 0
+    if a.cmd == "restore":
+        return emit(restore(), a.json)
+    if a.cmd == "snapshot":
+        return emit(snapshot_now(), a.json)
+    if a.cmd == "mux":
+        return emit(mux_set(a.mode), a.json)
+    if a.cmd == "apply":
+        return emit(apply_typewriter(), a.json)
+
+    ap.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
