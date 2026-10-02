@@ -158,8 +158,8 @@
   "tui.pwr_dur_days": "{d} d {h} h",
   "tui.pwr_watts_apply": "Setting cap to {n} W…",
   "tui.pwr_watts_fail": "Failed: {msg}",
-  "tui.pwr_watts_lbl": "Power cap (W)",
-  "tui.pwr_watts_now": "Cap is {n} W: caps the CPU while the mode is on.",
+  "tui.pwr_watts_lbl": "System cap (W)",
+  "tui.pwr_watts_now": "System cap {n} W: CPU, clocks, dGPU asleep. Draw {w} W → {h}. 5 h needs ≈ 9.4 W.",
   "tui.pwr_watts_off": "The 5–25 W cap only applies while Typewriter is on.",
   "tui.pwr_watts_ok": "Cap {n} W applied"
 }

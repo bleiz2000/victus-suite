@@ -319,8 +319,18 @@ class PowerTab(Vertical):
         except (TypeError, ValueError):
             want = 15
         cap.update(Text(t("tui.pwr_watts_lbl")))
-        hint.update(Text(t("tui.pwr_watts_now", n=want) if on
-                         else t("tui.pwr_watts_off")))
+        if on:
+            # честно показываем и потолок, и РЕАЛЬНЫЙ расход системы:
+            # без второго числа «5 часов» остаётся обещанием
+            bat = st.get("battery") or {}
+            watts = bat.get("watts")
+            hours = bat.get("hours")
+            hint.update(Text(t("tui.pwr_watts_now",
+                               n=want,
+                               w=("%.1f" % watts) if watts else "—",
+                               h=_fmt_dur(hours) if hours else "—")))
+        else:
+            hint.update(Text(t("tui.pwr_watts_off")))
         if abs(float(sl.value) - want) > 0.5:
             # это значение подтянуто из железа, а не перетянуто рукой
             self._watts_syncing = True

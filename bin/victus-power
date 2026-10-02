@@ -520,13 +520,34 @@ def _nvidia_warn(out) -> bool:
                                    "[n/a]", "invalid", "failed"))
 
 
-def set_watts(watt) -> dict:
-    """Потолок мощности CPU 5..25 Вт — только при включённой «печатной
-    машинке» (проверка и здесь, а не только в UI).
+def _cap_plan(w: int):
+    """Потолок w Вт на ВЕСЬ компьютер, а не только на PL1.
 
-    PL2 ставим ×2 от PL1: иначе однопоточный брост упирается в старый
-    PL2=115 Вт и слайдер выглядит неработающим.
+    План: PL1/PL2 (буст и многопоточность), max_perf_pct (потолок
+    интела по производительности) и потолок частоты на каждом ядре.
+    Плюс дискретка — она обязана уйти в Runtime D3, иначе один только
+    она съедает больше, чем весь бюджет.
     """
+    return (
+        ("rapl_pl1", os.path.join(RAPL, "constraint_0_power_limit_uw"),
+         str(w * 1_000_000), "%.0f Вт" % w),
+        ("rapl_pl2", os.path.join(RAPL, "constraint_1_power_limit_uw"),
+         str(w * 2_000_000), "%.0f Вт" % (w * 2)),
+        ("max_perf_pct", os.path.join(PSTATE_DIR, "max_perf_pct"),
+         str(20 + (w - 5) * 2), "%d %%" % (20 + (w - 5) * 2)),
+        ("dgpu_runtime", "/sys/bus/pci/devices/%s/power/control" % DGPU_PCI,
+         "auto", "auto (Runtime D3)"),
+    )
+
+
+def _cap_freq(w: int) -> int:
+    """Потолок частоты под бюджет: 5 Вт → 1.0 ГГц, 15 → 1.8, 25 → 2.6."""
+    return 1_000_000 + (w - 5) * 80_000
+
+
+def set_watts(watt) -> dict:
+    """Потолок мощности 5..25 Вт на всю систему — только при включённой
+    «печатной машинке» (проверка и здесь, а не только в UI)."""
     res = {"mode": "watts", "applied": [], "skipped": [], "failed": [],
            "restorable": False}
     try:
@@ -549,12 +570,7 @@ def set_watts(watt) -> dict:
             "включённой печатной машинке")
         return res
 
-    for key, path, want in (
-        ("rapl_pl1", os.path.join(RAPL, "constraint_0_power_limit_uw"),
-         "%d" % (w * 1_000_000)),
-        ("rapl_pl2", os.path.join(RAPL, "constraint_1_power_limit_uw"),
-         "%d" % (w * 2_000_000)),
-    ):
+    for key, path, want, shown in _cap_plan(w):
         if read(path) is None:
             res["skipped"].append("%s: нет %s" % (key, path))
             continue
@@ -562,13 +578,60 @@ def set_watts(watt) -> dict:
         if err:
             res["failed"].append("%s: %s" % (key, err))
             continue
-        cur = _watts(read(path))
-        want_w = float(w if key.endswith("pl1") else w * 2)
-        if cur is not None and abs(cur - want_w) <= 1:
-            res["applied"].append("%s=%.0f Вт" % (key, cur))
-        else:
-            res["failed"].append("%s: держит %.1f Вт, ждали %.0f"
-                                 % (key, cur if cur is not None else -1, want_w))
+        cur = read(path)
+        if cur == want:
+            res["applied"].append("%s=%s" % (key, shown))
+            continue
+        if key == "max_perf_pct" and cur is not None and int(cur) >= int(want):
+            res["applied"].append("%s=%s%% (держит %s)"
+                                  % (key, shown.split()[0], cur))
+            continue
+        res["failed"].append("%s: держит %s, ждали %s" % (key, cur, want))
+
+    # частота — на каждое ядро, но никогда выше его собственного
+    # cpuinfo_max_freq: E-ядра на этом железе кончаются на 1.9 ГГц
+    freq_want = _cap_freq(w)
+    cores = sorted(glob.glob(
+        "/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_max_freq"))
+    if not cores:
+        res["skipped"].append("частоты: cpufreq не найден")
+    else:
+        ok, bad, clamped = 0, 0, 0
+        for path in cores:
+            base = path.rsplit("/", 1)[0]
+            cap = read(os.path.join(base, "cpuinfo_max_freq"))
+            try:
+                want = min(freq_want, int(cap))
+            except (TypeError, ValueError):
+                want = freq_want
+            if want < freq_want:
+                clamped += 1
+            if read(path) is None:
+                bad += 1
+                continue
+            err = write(path, str(want), attempts=4, delay=0.2)
+            got = read(path)
+            if not err and got is not None and int(got) == want:
+                ok += 1
+            else:
+                bad += 1
+                if err:
+                    res["failed"].append("частота %s: %s" % (base, err))
+        line = "частота до %.2f ГГц на %d/%d ядрах" % (
+            freq_want / 1e6, ok, len(cores))
+        if clamped:
+            line += " (%d упёрлись в свой максимум)" % clamped
+        (res["failed"] if bad else res["applied"]).append(line)
+
+    # дискретка обязана уснуть: она одинаково жрёт и в покое, и под нагрузкой
+    runtime = dgpu_runtime(wait=4.0)
+    if runtime == "suspended":
+        res["applied"].append("dGPU suspended (0 Вт)")
+    elif runtime is None:
+        res["skipped"].append("dGPU: нет runtime_status")
+    else:
+        res["skipped"].append(
+            "dGPU ещё %s — уйдёт в Runtime D3 сама после idle" % runtime)
     return res
 
 
