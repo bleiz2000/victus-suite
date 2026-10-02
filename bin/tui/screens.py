@@ -13,9 +13,10 @@ from textual.widgets import Button
 from i18n import CONFIG_LOCALE, lang, t
 from tui import core
 from tui.kbd_tab import KbdTab
+from tui.power_tab import PowerTab
 from tui.vertil_tab import VertilTab
 
-TABS = (("tab-kbd", "kbd"), ("tab-vertil", "vertil"))
+TABS = (("tab-kbd", "kbd"), ("tab-vertil", "vertil"), ("tab-pwr", "pwr"))
 
 
 class VictusScreen(Container):
@@ -29,16 +30,21 @@ class VictusScreen(Container):
                 # активная вкладка подсвечена уже на старте (иначе ни одна
                 # не выглядит выбранной до первого клика)
                 yield Button(t("tui.tab_kbd"), id="tab-kbd",
-                             classes=f"tab{' on' if active != 'vertil' else ''}")
+                             classes=f"tab{' on' if active == 'kbd' else ''}")
                 yield Button(t("tui.tab_vertil"), id="tab-vertil",
                              classes=f"tab{' on' if active == 'vertil' else ''}")
+                yield Button(t("tui.tab_pwr"), id="tab-pwr",
+                             classes=f"tab{' on' if active == 'pwr' else ''}")
                 yield Button(t("tui.btn_lang"), id="lang")
             kbd = KbdTab(id="kbd")
             vertil = VertilTab(id="vertil")
-            kbd.display = active != "vertil"
+            pwr = PowerTab(id="pwr")
+            kbd.display = active == "kbd"
             vertil.display = active == "vertil"
+            pwr.display = active == "pwr"
             yield kbd
             yield vertil
+            yield pwr
 
 
 class VictusApp(App):
@@ -58,7 +64,7 @@ class VictusApp(App):
         border-title-style: bold;
         background: #0b0b0b;
     }
-    #shell #kbd, #shell #vertil {
+    #shell #kbd, #shell #vertil, #shell #pwr {
         width: 100%;
         height: 1fr;
     }
@@ -226,6 +232,53 @@ class VictusApp(App):
     }
     #power.-on .switch--slider {
         color: #ffd766;
+    }
+
+    /* ---- POWER: вкладка «Питание» ---- */
+    #pbody {
+        width: 100%;
+        height: 1fr;
+    }
+    #pcontrol {
+        width: 100%;
+        height: auto;
+    }
+    #p-mode-block {
+        width: 100%;
+        height: auto;
+        margin-bottom: 1;
+        padding-bottom: 1;
+        border-bottom: solid #8a6f2a;
+    }
+    #pwr-hint {
+        margin-top: 1;
+        color: #9a9a9a;
+    }
+    #p-readouts {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+    }
+    #pstatusline {
+        width: 100%;
+        height: 1;
+        align: center middle;
+    }
+    #pstatus-flow {
+        width: 100%;
+        height: 1;
+        align: center middle;
+    }
+    #pstatus-tag {
+        width: auto;
+        height: 1;
+        padding-right: 2;
+        color: #8a8a8a;
+    }
+    #pstatus {
+        width: auto;
+        height: 1;
+        color: #7ee787;
     }
 
     /* ---- COLOR PICKER ---- */
@@ -614,13 +667,16 @@ class VictusApp(App):
             # _boot сам показывает статус доступа (нужен пароль / готово)
             self.query_one("#vertil")._boot()
             return
+        if self.active_tab == "pwr":
+            self.query_one("#pwr")._boot()
+            return
         tab = self.query_one("#kbd")
         tab._sync_controls()
         tab._set_status(t("tui.status_ready"))
 
     def _show_tab(self, name: str):
         """Переключение вкладок без размонтирования: display, не remove."""
-        if name not in ("kbd", "vertil"):
+        if name not in ("kbd", "vertil", "pwr"):
             return
         self.active_tab = name
         for bid, tab_id in TABS:
@@ -628,9 +684,10 @@ class VictusApp(App):
             tab.display = name == tab_id
             self.query_one("#%s" % bid, Button).set_class(name == tab_id, "on")
         shown = self.query_one("#%s" % name)
-        first = shown.query("Button").first()
-        if first is not None:
-            first.focus()
+        # у вкладки «Питание» кнопок может не быть — фокус по желанию
+        for btn in shown.query("Button"):
+            btn.focus()
+            break
 
     async def on_button_pressed(self, event):
         bid = event.button.id
@@ -660,6 +717,7 @@ class VictusApp(App):
         was_auto = bool(vertil.autopilot)
         KbdTab._rebuilding = True
         VertilTab._rebuilding = True
+        PowerTab._rebuilding = True
         try:
             screen = self.screen
             await screen.remove_children()
@@ -667,6 +725,7 @@ class VictusApp(App):
         finally:
             KbdTab._rebuilding = False
             VertilTab._rebuilding = False
+            PowerTab._rebuilding = False
         if was_running:
             self.query_one("#kbd").restore_running()
         if was_auto:

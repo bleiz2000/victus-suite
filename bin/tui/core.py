@@ -57,6 +57,8 @@ DEFAULTS = {
     "stops": [None, None, None, None],
     "brightness": 100,
     "running": False,
+    # режим питания: "normal" | "typewriter" (вкладка «Питание»)
+    "power_mode": "normal",
 }
 
 
@@ -158,6 +160,9 @@ def load_state() -> dict:
     state["power"] = bool(state.get("power", True))
     state["effect"] = state.get("effect") if state.get("effect") in ("none", "cycle", "fade") else "none"
     state["running"] = bool(state.get("running", False))
+    state["power_mode"] = (state.get("power_mode")
+                           if state.get("power_mode") in ("normal", "typewriter")
+                           else "normal")
     state["stops"] = norm_stops(state.get("stops"))
     state["hex"] = to_hex(tuple(state["rgb"]))
     return state
