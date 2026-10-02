@@ -87,7 +87,7 @@
 | Фоновый демон (unix-сокет, держит эффекты) | `bin/victusd` | ✅ |
 | Иконка в трее (AyatanaAppIndicator3) | `bin/victus-tray` | ✅ |
 | Проверка прав без лишнего sudo (`probe_access`) | `bin/tui/core.py` + `bin/victus-kbd` | ✅ (установлено sudoers NOPASSWD) |
-| Версия | `VERSION` | `1.1.2` |
+| Версия | `VERSION` | `1.2.0` |
 | Дорожная карта упаковки/дистрибуции | `ROADMAP.md` | ✅ R1…R5 |
 | Документация исследования | `docs/01..06` | ✅ |
 | Техническое задание | `TZ.md` | ✅ (§14 — версия 1.0.0-beta) |

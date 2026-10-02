@@ -1,6 +1,6 @@
 # OMEN Gaming Hub for Linux
 
-**Version:** v1.1.2 · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
+**Version:** v1.2.0 · **License:** MIT · **Repo:** `https://github.com/bleiz2000/victus-suite`
 
 > **English (primary)** · [Русская версия →](README.ru.md)
 
@@ -16,7 +16,7 @@ Local project folder: `~/Work/victus-suite` → GitHub `victus-suite`.
 stage 2 (TUI on Textual), stage 3 (effects and power profiles).
 Details — `START_DEVELOPMENT.md` §4.
 
-## Installation (v1.1.2)
+## Installation (v1.2.0)
 
 **From a release (recommended):**
 
@@ -26,7 +26,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # TUI engine (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.2/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # symlinks + menu entry
 ```
@@ -75,13 +75,14 @@ Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 | `victus-kbd cycle <c...> [--delay S] [--bg]` | color loop in background | yes |
 | `victus-kbd stop` | stop the loop | yes |
 | `victus-kbd get` / `dump [start] [len]` | current RGB / EC dump | yes |
+| `victus-kbd power on\|off\|toggle` | backlight on/off — writes EC **and** `state/last_state.json` (the tab follows it) | yes |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | vertil fans (hwmon PWM) | via the rule above |
 | `ColorMaker list\|add\|rm\|palette` | named colors (english only) | no |
 | `Changer <name\|R G B\|#RRGGBB\|random\|off>` | apply color | asks sudo |
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
 | `Changer cycle <colors> [--delay S]` | custom loop | asks sudo |
 | `Changer stop` | stop the loop | asks sudo |
-| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — RGB sliders + effects, **fans tab** | asks sudo |
+| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — RGB sliders + effects, **fans + power tabs** | asks sudo |
 | `victusd [--verbose\|--quit]` | background daemon (unix socket, keeps effects alive) | no |
 | `victus-tray` | tray icon: open window / start-stop effect / quit | no |
 | `victus-report [--with-ec]` | diagnostics + logs into one file | no |
@@ -105,10 +106,10 @@ Changer 120 200 255          # arbitrary RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # your own name (english)
 Changer mycolor
-victus_tui                   # TUI (v1.1.2)
+victus_tui                   # TUI (v1.2.0)
 ```
 
-### TUI (v1.1.2)
+### TUI (v1.2.0)
 
 ```bash
 victus_tui                   # launch (asks sudo on EC writes)
@@ -297,6 +298,36 @@ smoke suite and validated live on this machine: SMART starts from the tab,
 the chosen mode is restored on relaunch, closing the window holds 180 PWM
 (logs + `vertil/docs/2026-09-30-tui-integration-session.md` §7).
 
+## Power — Typewriter mode (Power tab)
+
+Battery is 52.7 Wh, the target is 5 h → the machine must sit under **~9.4 W**
+on average. The tab toggles a system-wide, fully reversible cap.
+
+| Control | What it does |
+|---|---|
+| **Typewriter switch** | PL1 = N W, PL2 = 2·N, `max_perf_pct = 20 + (N-5)·2`, per-CPU frequency ceiling `1.0 + 0.08·(N-5)` GHz (clamped by `cpuinfo_max_freq`), dGPU → `power/control=auto` (parks in D3cold). Every value it overwrites is captured first. |
+| **Watt slider 5..25** | the same cap, retuned live (click, arrows, PgUp/PgDn, Home/End, wheel); the slider goes dead while the mode is off. |
+| **Readout** | battery W, charge %, ETA to empty, and the real system draw — so the honest answer is visible when 5 h is out of reach (a browser + editor sits at 12-16 W). |
+| **Switch off** | full revert: PL1/PL2, perf cap, freq ceiling, dGPU control and the previous fan mode all come back (`.bak` in `state/power_prev.json`). |
+
+`sudo victus-power watts N` applies the same plan from the CLI (refuses with
+rc=1 while the mode is off).
+
+### Keyboard backlight hotkeys
+
+This laptop has **no** `/sys/class/leds/*kbd_backlight*`, so the stock Omarchy
+binding (`omarchy-brightness-keyboard`) just errors out. The three keys are
+rebound in `~/.config/hypr/bindings.lua`:
+
+| Key | Action |
+|---|---|
+| `XF86KbdLightOnOff` | `victus-kbd power toggle` |
+| `XF86KbdBrightnessUp` | `victus-kbd power on` |
+| `XF86KbdBrightnessDown` | `victus-kbd power off` |
+
+They write EC **and** `state/last_state.json`; the Keyboard tab polls that file
+every 1.5 s, so the switch and the color follow within a tick.
+
 ## Interface language (localization)
 
 Default is **English (us)**. Messages live in `locales/<code>.json`,
@@ -341,7 +372,7 @@ victus-suite/
 ├── PROGRESS_LOG.md               ← context journal (status, time, next step)
 ├── ROADMAP.md                    ← next stage: script → installable app
 ├── TZ.md                         ← full technical specification
-├── VERSION                       ← 1.1.2 (single source of truth)
+├── VERSION                       ← 1.2.0 (single source of truth)
 ├── install.sh                    ← ./install.sh [--remove] → symlinks + menu entry + icons
 ├── share/
 │   └── icons/                    ← black&white icon: victus-suite.svg, hicolor PNGs, make_icon.py

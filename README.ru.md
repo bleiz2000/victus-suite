@@ -2,7 +2,7 @@
 
 > [English (primary) →](README.md) · **Русская версия**
 
-**Версия:** v1.1.2 · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
+**Версия:** v1.2.0 · **Лицензия:** MIT · **Репозиторий:** `https://github.com/bleiz2000/victus-suite`
 
 Аналог OMEN Gaming Hub для Linux: подсветка клавиатуры HP Victus/OMEN,
 режимы питания, вентиляторы, мониторинг и оверлей (замена Shift+F2).
@@ -16,7 +16,7 @@
 этап 2 (TUI на Textual), этап 3 (эффекты и профили питания).
 Подробности — `START_DEVELOPMENT.md` §4.
 
-## Установка (v1.1.2)
+## Установка (v1.2.0)
 
 **Из релиза (рекомендуется):**
 
@@ -26,7 +26,7 @@ sudo pacman -S --needed python python-gobject ayatana-appindicator3 foot
 python -m pip install --user textual      # движок TUI (8.x)
 
 mkdir -p ~/Work && cd ~/Work
-curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.1.2/victus-suite.tar.gz
+curl -L -o vs.tar.gz https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite.tar.gz
 tar xzf vs.tar.gz && cd victus-suite
 ./install.sh                              # симлинки + ярлык в меню
 ```
@@ -75,13 +75,14 @@ victus-tray            # трей: открыть окно / старт-стоп
 | `victus-kbd cycle <c...> [--delay S] [--bg]` | Цикл цветов в фоне | да |
 | `victus-kbd stop` | Остановить цикл | да |
 | `victus-kbd get` / `dump [start] [len]` | Текущий RGB / дамп EC | да |
+| `victus-kbd power on\|off\|toggle` | Вкл/выкл подсветки — пишет и EC, и `state/last_state.json` (вкладка подхватывает) | да |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | вентиляторы vertil (PWM в hwmon) | по правилу выше |
 | `ColorMaker list\|add\|rm\|palette` | Именованные цвета (только english) | нет |
 | `Changer <имя\|R G B\|#RRGGBB\|random\|off>` | Применить цвет | спросит sudo |
 | `Changer cycle-red` | **Цикл ярко-красных** (red/fire/scarlet/darkred) | спросит sudo |
 | `Changer cycle <цвета> [--delay S]` | Свой цикл | спросит sudo |
 | `Changer stop` | Остановить цикл | спросит sudo |
-| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — RGB-полоски, эффекты, **вкладка фенов** | спросит sudo |
+| `victus_tui [--window\|--tray]` | **TUI (v1.1-beta)** — RGB-полоски, эффекты, **вкладки фенов и питания** | спросит sudo |
 | `victusd [--verbose\|--quit]` | фоновый демон (unix-сокет, держит эффекты живыми) | нет |
 | `victus-tray` | иконка в трее: открыть окно / старт-стоп / выход | нет |
 | `victus-report [--with-ec]` | Диагностика + логи в один файл | нет |
@@ -105,10 +106,10 @@ Changer 120 200 255          # произвольный RGB
 Changer random
 ColorMaker add mycolor 30 144 255   # своё имя (english)
 Changer mycolor
-victus_tui                   # TUI (v1.1.2)
+victus_tui                   # TUI (v1.2.0)
 ```
 
-### TUI (v1.1.2)
+### TUI (v1.2.0)
 
 ```bash
 victus_tui                   # запуск (при записи в EC спросит sudo)
@@ -298,6 +299,35 @@ headless-смоук-сьютом и прогнаны на живом желез�
 выбранный режим восстанавливается при повторном открытии, закрытие окна
 держит 180 PWM (логи + `vertil/docs/2026-09-30-tui-integration-session.md` §7).
 
+## Питание — режим «Печатная машинка» (вкладка «Питание»)
+
+Батарея 52.7 Вт·ч, цель 5 ч → ноут должен держаться в среднем под **~9.4 Вт**.
+Вкладка включает потолок на всю систему, полностью обратимый.
+
+| Элемент | Что делает |
+|---|---|
+| **Тумблер «Печатная машинка»** | PL1 = N Вт, PL2 = 2·N, `max_perf_pct = 20 + (N-5)·2`, потолок частоты на ядро `1.0 + 0.08·(N-5)` ГГц (с ограничением по `cpuinfo_max_freq`), дискретка → `power/control=auto` (уходит в D3cold). Каждое затираемое значение сначала снимается в снимок. |
+| **Ползунок 5–25 Вт** | тот же потолок, перенастраивается на лету (клик, стрелки, PgUp/PgDn, Home/End, колесо); мёртв, пока режим выключен. |
+| **Показания** | Вт из батареи, % заряда, время до полного разряда и **реальный** расход системы — чтобы честно видеть, когда 5 ч недостижимы (браузер + редактор даёт 12–16 Вт). |
+| **Тумблер выкл** | полный откат: PL1/PL2, потолок производительности, частоты, дискретка и прежний режим вентиляторов возвращаются (`.bak` в `state/power_prev.json`). |
+
+То же самое из CLI: `sudo victus-power watts N` (rc=1, если режим выключен).
+
+### Горячие клавиши подсветки
+
+На этом ноутбуке **нет** `/sys/class/leds/*kbd_backlight*`, поэтому штатный
+байнд Omarchy (`omarchy-brightness-keyboard`) просто падает с ошибкой.
+Три клавиши перепривязаны в `~/.config/hypr/bindings.lua`:
+
+| Клавиша | Действие |
+|---|---|
+| `XF86KbdLightOnOff` | `victus-kbd power toggle` |
+| `XF86KbdBrightnessUp` | `victus-kbd power on` |
+| `XF86KbdBrightnessDown` | `victus-kbd power off` |
+
+Они пишут и EC, и `state/last_state.json`; вкладка «Клавиатура» опрашивает файл
+раз в 1.5 с — тумблер и цвет догоняют за один тик.
+
 ## Язык интерфейса (локализация)
 
 По умолчанию **английский (us)**. Сообщения лежат в `locales/<код>.json`,
@@ -341,7 +371,7 @@ victus-suite/
 ├── PROGRESS_LOG.md               ← журнал контекста (статус, время, следующий шаг)
 ├── ROADMAP.md                    ← следующий этап: скрипт → устанавливаемое приложение
 ├── TZ.md                         ← полное техническое задание
-├── VERSION                       ← 1.1.2 (источник правды по версии)
+├── VERSION                       ← 1.2.0 (источник правды по версии)
 ├── install.sh                    ← ./install.sh [--remove] → симлинки + ярлык меню + иконки
 ├── share/
 │   └── icons/                    ← ч/б иконка: victus-suite.svg, PNG для hicolor, make_icon.py
