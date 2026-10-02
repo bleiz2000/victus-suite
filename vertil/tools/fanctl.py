@@ -26,7 +26,7 @@ import fanlib as F  # noqa: E402
 
 def usage(msg: str) -> int:
     print("fanctl: %s" % msg, file=sys.stderr)
-    print("usage: fanctl.py status | set-pwm <0..255> <0..255> | "
+    print("usage: fanctl.py status | set-pwm <0..255> [<0..255>] | "
           "set-mode <0|1|2> | hold <0..255>", file=sys.stderr)
     return 1
 
@@ -66,11 +66,12 @@ def main(argv) -> int:
         return 0
 
     if cmd == "set-pwm":
-        if len(argv) != 3:
-            return usage("set-pwm ждёт два числа")
+        if len(argv) not in (2, 3):
+            return usage("set-pwm ждит одно или два числа")
         bad: list = []
         p1 = number(argv[1], "pwm1", bad)
-        p2 = number(argv[2], "pwm2", bad)
+        # один канал (драйвер без pwm2) — второй аргумент необязателен
+        p2 = number(argv[2], "pwm2", bad) if len(argv) == 3 else p1
         if bad:
             print("fanctl: " + "; ".join(bad), file=sys.stderr)
             return 1
@@ -106,6 +107,14 @@ def main(argv) -> int:
 
     # 2. права: запись в pwm* только от root
     if not fans.writable:
+        wanted = [fans.enable_attr, fans.cpu_pwm_out, fans.gpu_pwm_out]
+        missing = [a for a in wanted
+                   if a and not os.path.exists(os.path.join(fans.hp or "", a))]
+        if missing:
+            # отсутствие файла — не отсутствие прав: врать про root нельзя
+            print("нет атрибутов: %s — драйвер не экспортирует их"
+                  % ", ".join(missing), file=sys.stderr)
+            return 2
         print("нет прав: нужен root (sudo)", file=sys.stderr)
         return 1
 

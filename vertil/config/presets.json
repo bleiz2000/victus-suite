@@ -2,9 +2,8 @@
   "schema": 1,
   "name": "victus-2026-09-30",
   "created": "2026-09-30",
-  "updated": "2026-09-30",
+  "updated": "2026-10-02",
   "description": "Пресет вентиляторов HP Victus 16-r0xxx: предиктивный контроллер SMART, снятый и проверён в 3-фазном тесте (BIOS AUTO / топор / SMART). Всё живёт только внутри vertil/, в систему ничего не пишется.",
-
   "device": {
     "board": "8BBE",
     "bios": "F.26",
@@ -14,7 +13,6 @@
     "max_cpu_rpm": 5800,
     "max_gpu_rpm": 5800
   },
-
   "sensors": {
     "fan_chip": "hp",
     "fan_chip_driver": "hp-wmi",
@@ -26,18 +24,27 @@
     "gpu_tool": "nvidia-smi",
     "note": "Датчика VRM нет — hp-wmi не экспортирует шину EC; используется ACPI-прокси TCPU_PCI. Искать чипы по name, НЕ по индексу hwmon (плавает)."
   },
-
   "fans": {
     "pwm_max": 255,
-    "cpu": { "rpm_in": "fan1_input", "pwm_out": "pwm1" },
-    "gpu": { "rpm_in": "fan2_input", "pwm_out": "pwm2" },
+    "cpu": {
+      "rpm_in": "fan1_input",
+      "pwm_out": "pwm1"
+    },
+    "gpu": {
+      "rpm_in": "fan2_input",
+      "pwm_out": "pwm2"
+    },
     "enable_attr": "pwm1_enable",
     "enable_is_shared": true,
-    "modes": { "max": 0, "manual": 1, "auto": 2 },
+    "modes": {
+      "max": 0,
+      "manual": 1,
+      "auto": 2
+    },
     "readback_semantics": "pwm* на чтение = отображённый фактический RPM (не setpoint)",
-    "write_rule": "запись в pwm* только при enable==1, иначе -EINVAL; запись только root"
+    "write_rule": "запись в pwm* только при enable==1, иначе -EINVAL; запись только root",
+    "single_channel_note": "Драйвер hp-wmi (Omen Space DKMS) экспортирует только канал 0: файла pwm2 нет, обе лопасти ведёт pwm1 (вторая — со сдвигом gpu_delta). fanlib сам определяет это по наличию файла и пишет max(pwm1, pwm2)."
   },
-
   "safety": {
     "fail_safe_pwm": 255,
     "fail_safe_enable_mode": 0,
@@ -46,7 +53,6 @@
     "auto_is_not_instant_fail_safe": true,
     "note": "Запись pwm1_enable=2 (MANUAL->AUTO) глушит вентиляторы на ~215 с при 92-99 C. Fail-safe = enable=0 (MAX) или удерживаемый PWM."
   },
-
   "guard": {
     "cpu_hot_c": 99,
     "cpu_hot_streak": 3,
@@ -57,7 +63,6 @@
     "log": "vertil/tools/lab/guard.log",
     "rationale": "96-100 C под нагрузкой на этой машине штатное состояние; порог поднят, чтобы guard не перебивал контроллер."
   },
-
   "smart": {
     "enabled": true,
     "horizon_s": 8.0,
@@ -69,12 +74,46 @@
     "rise_pwm_per_s": 8.0,
     "fall_pwm_per_s": 3.0,
     "deadband": 2.0,
-    "init_pwm": [79, 92],
-    "cpu_band": { "low": 52.0, "span": 38.0, "weight": 1.0 },
-    "gpu_band": { "low": 50.0, "span": 36.0, "weight": 1.0 },
-    "vrm_band": { "low": 62.0, "span": 26.0, "weight": 1.0 },
-    "weights": { "cpu_to_gpu": 0.45, "vrm_to_cpu": 0.85, "vrm_to_gpu": 0.55 },
-    "emergency": { "cpu_c": 93.0, "gpu_c": 83.0, "pwm": 255 },
+    "init_pwm": [
+      79,
+      92
+    ],
+    "filter": {
+      "median_window": 3,
+      "rise_c": 12.0,
+      "fall_c": 6.0,
+      "rationale": "Медиана-3 гасит одиночные пики TCPU_PCI/coretemp, slew-лимит ограничивает dT/dt для экстраполяции. Настоящий разогрев (несколько снимков подряд) проходит без потерь; авария считается по сырой температуре и фильтром не задерживается."
+    },
+    "hysteresis": {
+      "up": 5,
+      "down": 8,
+      "rationale": "Цель PWM держится, пока новая не отклонится больше чем на up (вверх) / down (вниз) — крутилка не метётся на границе полосы."
+    },
+    "cpu_band": {
+      "low": 52.0,
+      "span": 38.0,
+      "weight": 1.0
+    },
+    "gpu_band": {
+      "low": 50.0,
+      "span": 36.0,
+      "weight": 1.0
+    },
+    "vrm_band": {
+      "low": 62.0,
+      "span": 26.0,
+      "weight": 1.0
+    },
+    "weights": {
+      "cpu_to_gpu": 0.45,
+      "vrm_to_cpu": 0.85,
+      "vrm_to_gpu": 0.55
+    },
+    "emergency": {
+      "cpu_c": 93.0,
+      "gpu_c": 83.0,
+      "pwm": 255
+    },
     "caps": {
       "enabled": false,
       "cpu_pwm_max": 190,
@@ -84,7 +123,6 @@
       "rationale": "3912 -> 5773 RPM на CPU дал +48 % шума при -0.2 C. Кеп 190 (~4300 RPM) стоит МЕЖДУ двумя проверенными точками. enabled=false = поведение ровно как в проверенной фазе P3; включить после контрольной фазы."
     }
   },
-
   "brutal": {
     "cpu_on_c": 82,
     "gpu_on_c": 78,
@@ -93,15 +131,26 @@
     "base_pwm": 110,
     "hot_pwm": 255
   },
-
   "loadgen": {
-    "yield": { "cpu_c": 96, "busy_pct": 85, "gpu_util_pct": 92 },
-    "light": { "cpu_c": 90, "busy_pct": 70, "gpu_util_pct": 80, "cpu_threads": 3, "gpu_duty": 40 },
-    "full":  { "cpu_threads": 8, "gpu_duty": 85 },
+    "yield": {
+      "cpu_c": 96,
+      "busy_pct": 85,
+      "gpu_util_pct": 92
+    },
+    "light": {
+      "cpu_c": 90,
+      "busy_pct": 70,
+      "gpu_util_pct": 80,
+      "cpu_threads": 3,
+      "gpu_duty": 40
+    },
+    "full": {
+      "cpu_threads": 8,
+      "gpu_duty": 85
+    },
     "affinity": "taskset -c 2-15, nice -n 19, ionice -c3",
     "state_file": "loadgen.state"
   },
-
   "provenance": {
     "report": "vertil/docs/2026-09-30-3phase-fan-test-report.md",
     "report_snapshot": "vertil/config/report-2026-09-30.md",
@@ -115,19 +164,46 @@
     ],
     "analysis_tool": "vertil/tools/lab/analyze.py"
   },
-
   "baseline": {
     "note": "Ключевые цифры 3-фазного теста (2026-09-30) — точка отсчёта для будущих изменений пресета.",
     "phases": {
-      "P1_bios_auto": { "dur_s": 300, "busy_pct": 39.8, "tcpu_mean": 95.6, "tcpu_p95": 99.0,
-                        "tgpu_mean": 77.5, "tvrm_mean": 95.6, "fan1_rpm": 3912, "fan2_rpm": 4200,
-                        "thr_per_min": 7478, "thr_per_min_per_busy": 18778 },
-      "P2_brutal":     { "dur_s": 360, "busy_pct": 45.2, "tcpu_mean": 95.4, "tcpu_p95": 99.0,
-                        "tgpu_mean": 68.8, "tvrm_mean": 95.2, "fan1_rpm": 5773, "fan2_rpm": 5828,
-                        "thr_per_min": 7382, "thr_per_min_per_busy": 16314 },
-      "P3_smart":      { "dur_s": 480, "busy_pct": 46.1, "tcpu_mean": 95.2, "tcpu_p95": 99.0,
-                        "tgpu_mean": 70.4, "tvrm_mean": 95.4, "fan1_rpm": 5779, "fan2_rpm": 5762,
-                        "thr_per_min": 7187, "thr_per_min_per_busy": 15589, "freq_mean_mhz": 3263 }
+      "P1_bios_auto": {
+        "dur_s": 300,
+        "busy_pct": 39.8,
+        "tcpu_mean": 95.6,
+        "tcpu_p95": 99.0,
+        "tgpu_mean": 77.5,
+        "tvrm_mean": 95.6,
+        "fan1_rpm": 3912,
+        "fan2_rpm": 4200,
+        "thr_per_min": 7478,
+        "thr_per_min_per_busy": 18778
+      },
+      "P2_brutal": {
+        "dur_s": 360,
+        "busy_pct": 45.2,
+        "tcpu_mean": 95.4,
+        "tcpu_p95": 99.0,
+        "tgpu_mean": 68.8,
+        "tvrm_mean": 95.2,
+        "fan1_rpm": 5773,
+        "fan2_rpm": 5828,
+        "thr_per_min": 7382,
+        "thr_per_min_per_busy": 16314
+      },
+      "P3_smart": {
+        "dur_s": 480,
+        "busy_pct": 46.1,
+        "tcpu_mean": 95.2,
+        "tcpu_p95": 99.0,
+        "tgpu_mean": 70.4,
+        "tvrm_mean": 95.4,
+        "fan1_rpm": 5779,
+        "fan2_rpm": 5762,
+        "thr_per_min": 7187,
+        "thr_per_min_per_busy": 15589,
+        "freq_mean_mhz": 3263
+      }
     },
     "key_findings": [
       "CPU: 3912 -> 5773 RPM = +48 % шума при -0.2 C (не лимитируется вентиляторами выше ~4000 RPM)",

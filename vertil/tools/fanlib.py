@@ -118,7 +118,17 @@ class Fans:
         f = self.preset["fans"]
         self.hp = find_hwmon(self.preset["sensors"]["fan_chip"], "pwm1")
         self.cpu_rpm_in, self.gpu_rpm_in = f["cpu"]["rpm_in"], f["gpu"]["rpm_in"]
-        self.cpu_pwm_out, self.gpu_pwm_out = f["cpu"]["pwm_out"], f["gpu"]["pwm_out"]
+        self.cpu_pwm_out = f["cpu"]["pwm_out"]
+        gpu_pwm = f["gpu"]["pwm_out"]
+        # Драйвер может не экспортировать второй канал (Omen Space hp-wmi:
+        # is_visible(channel=1) -> 0, pwm2 физически нет, обе лопасти ведёт
+        # один pwm1). Тогда НЕ пытаемся писать в несуществующий файл —
+        # open(..., "w") в sysfs вернул бы EACCES и мы соврали бы про права.
+        self.gpu_pwm_out = (
+            gpu_pwm if self.hp and os.path.exists(os.path.join(self.hp, gpu_pwm))
+            else None
+        )
+        self.shared_pwm = self.gpu_pwm_out is None
         self.enable_attr = f["enable_attr"]
         self.modes = {int(v): k for k, v in f["modes"].items()}
         self.pwm_max = f["pwm_max"]
@@ -129,23 +139,42 @@ class Fans:
         return self.hp is not None
 
     @property
+    def channels(self) -> int:
+        """1 — один PWM на обе лопасти, 2 — независимые каналы."""
+        return 1 if self.shared_pwm else 2
+
+    @property
     def writable(self) -> bool:
+        """Можно ли реально писать: атрибут существует И доступен на запись."""
         if not self.hp:
             return False
-        return os.access(os.path.join(self.hp, self.enable_attr), os.W_OK)
+        paths = [os.path.join(self.hp, self.enable_attr),
+                 os.path.join(self.hp, self.cpu_pwm_out)]
+        if self.gpu_pwm_out:
+            paths.append(os.path.join(self.hp, self.gpu_pwm_out))
+        return all(os.path.exists(p) and os.access(p, os.W_OK) for p in paths)
 
     def read(self) -> dict:
         if not self.hp:
             return {"mode": None, "mode_name": "N/A", "fan1": None, "fan2": None,
-                    "pwm1": None, "pwm2": None}
+                    "pwm1": None, "pwm2": None, "pwm_shared": self.shared_pwm,
+                    "channels": self.channels}
         mode = _int(os.path.join(self.hp, self.enable_attr))
+        pwm1 = _int(os.path.join(self.hp, self.cpu_pwm_out))
+        if self.shared_pwm:
+            # один канал: driver ведёт обе лопасти от pwm1 (вторая с gpu_delta)
+            pwm2 = pwm1
+        else:
+            pwm2 = _int(os.path.join(self.hp, self.gpu_pwm_out))
         return {
             "mode": mode,
             "mode_name": self.modes.get(mode, str(mode)),
             "fan1": _int(os.path.join(self.hp, self.cpu_rpm_in)),
             "fan2": _int(os.path.join(self.hp, self.gpu_rpm_in)),
-            "pwm1": _int(os.path.join(self.hp, self.cpu_pwm_out)),
-            "pwm2": _int(os.path.join(self.hp, self.gpu_pwm_out)),
+            "pwm1": pwm1,
+            "pwm2": pwm2,
+            "pwm_shared": self.shared_pwm,
+            "channels": self.channels,
         }
 
     # -- запись ------------------------------------------------------------- #
@@ -153,9 +182,16 @@ class Fans:
         if not self.hp:
             return "hp hwmon not found"
         path = os.path.join(self.hp, attr)
+        # Проверяем ДО open: на отсутствующем sysfs-файле open("w") просит
+        # VFS создать узел, тот отвечает EACCES, и Python поднимает
+        # PermissionError — то самое ложное «нет прав: нужен root».
+        if not os.path.exists(path):
+            return "нет атрибута %s — драйвер не экспортирует его (%s)" % (attr, path)
         try:
             with open(path, "w") as fh:
                 fh.write("%d\n" % int(value))
+        except FileNotFoundError:
+            return "нет атрибута %s — драйвер не экспортирует его (%s)" % (attr, path)
         except PermissionError:
             return "нет прав: нужен root (sudo)"
         except OSError as e:
@@ -180,6 +216,11 @@ class Fans:
                 return err
         p1 = max(0, min(self.pwm_max, int(p1)))
         p2 = max(0, min(self.pwm_max, int(p2)))
+        if self.shared_pwm:
+            # Один канал на обе лопасти: пишем максимум из двух требований,
+            # иначе перегрев по «чужому» датчику (GPU при холодном CPU) был
+            # бы молча отброшен.
+            return self._w(self.cpu_pwm_out, max(p1, p2))
         for attr, val in ((self.cpu_pwm_out, p1), (self.gpu_pwm_out, p2)):
             err = self._w(attr, val)
             if err:
@@ -217,6 +258,48 @@ class RAPL:
         return round(de / 1e6 / dt, 1)
 
 
+class TempFilter:
+    """Медиана-3 + ограничение скорости (slew) для одного датчика.
+
+    ACPI-прокси VRM (TCPU_PCI) и coretemp иногда отдают одиночный скачок:
+    такой всплеск давал крутой dT/dt, SMART экстраполировал его на горизонт
+    и уходил в потолок — лопасти рвались на максимум без причины. Медиана
+    выбрасывает одиночный выброс из окна (нужны 2 совпадения из 3), а
+    slew-лимит ограничивает dT/dt, который видит экстраполяция. Настоящий
+    разогрев проходит: он держится несколько снимков подряд.
+    """
+
+    def __init__(self, window: int = 3, rise: float | None = None,
+                 fall: float | None = None):
+        self.window = max(1, int(window))
+        self.rise = None if rise is None else float(rise)   # °C за снимок
+        self.fall = None if fall is None else float(fall)
+        self.buf: list = []
+        self.out: float | None = None
+
+    def update(self, raw):
+        if raw is None:
+            # датчик мигнул — держим последнее валидное значение
+            return self.out
+        self.buf.append(float(raw))
+        if len(self.buf) > self.window:
+            self.buf.pop(0)
+        med = sorted(self.buf)[len(self.buf) // 2]
+        if self.out is None:
+            self.out = round(med, 1)
+            return self.out
+        delta = med - self.out
+        step = self.rise if delta > 0 else self.fall
+        if step is not None:
+            delta = max(-step, min(step, delta))
+        self.out = round(self.out + delta, 1)
+        return self.out
+
+    def reset(self) -> None:
+        self.buf.clear()
+        self.out = None
+
+
 class Sensors:
     """Один снимок всех величин, нужных пульту и контроллерам."""
 
@@ -233,6 +316,12 @@ class Sensors:
         self.thr_path = "/sys/devices/system/cpu/cpu0/thermal_throttle"
         self.fans = Fans(self.preset)
         self._nvidia_last_ok = True
+        fp = (self.preset.get("smart") or {}).get("filter") or {}
+        window = int(fp.get("median_window", 3))
+        rise = float(fp.get("rise_c", 12.0))
+        fall = float(fp.get("fall_c", 6.0))
+        self._filt = {k: TempFilter(window, rise, fall)
+                      for k in ("t_cpu", "t_gpu", "t_vrm", "t_board")}
 
     # -- helpers ------------------------------------------------------------ #
     @staticmethod
@@ -328,6 +417,14 @@ class Sensors:
         busy, d["busy_prev"] = self.cpu_busy(busy_prev)
         d["cpu_busy"] = busy
         d.update(self.fans.read())
+
+        # Фильтрация: в t_* уходят сглаженные значения (ими управляет
+        # контроллер), сырые копии остаются в *_raw — по ним считается
+        # авария, чтобы фильтр не задержал реакцию на настоящий перегрев.
+        for key, flt in self._filt.items():
+            raw = d.get(key)
+            d["%s_raw" % key] = raw
+            d[key] = flt.update(raw)
         return d
 
     @staticmethod
@@ -399,6 +496,9 @@ class Smart:
         self.w_vg = p["weights"]["vrm_to_gpu"]
         self.e_cpu = p["emergency"]["cpu_c"]
         self.e_gpu = p["emergency"]["gpu_c"]
+        hyst = p.get("hysteresis") or {}
+        self.h_up = float(hyst.get("up", 0))
+        self.h_down = float(hyst.get("down", 0))
         self.cap_cpu = p["caps"]["cpu_pwm_max"]
         self.cap_gpu = p["caps"]["gpu_pwm_max"]
         self.cap_over = p["caps"]["override_temp_c"]
@@ -407,9 +507,26 @@ class Smart:
         if seed:
             i1, i2 = seed
         self.p1, self.p2 = float(i1), float(i2)
+        self.t1_h: float | None = None
+        self.t2_h: float | None = None
         self.hist = []
         self._hot = 0
         self.written1 = self.written2 = None
+
+    @staticmethod
+    def _hyst(target: float, prev: float | None, up: float, down: float) -> float:
+        """Гистерезис цели: вверх — только на up, вниз — только на down.
+
+        Убирает дрожание вокруг границы полосы (цель то чуть выше, то чуть
+        ниже → крутилка метётся), не трогая настоящие разогревы/остывания.
+        """
+        if prev is None:
+            return target
+        if target > prev + up:
+            return target
+        if target < prev - down:
+            return target
+        return prev
 
     @staticmethod
     def _slope(hist, idx, window):
@@ -449,10 +566,19 @@ class Smart:
 
         t1 = self.FLOOR + (self.CEIL - self.FLOOR) * clamp(score1, 0.0, 1.0)
         t2 = self.FLOOR + (self.CEIL - self.FLOOR) * clamp(score2, 0.0, 1.0)
+        t1 = self._hyst(t1, self.t1_h, self.h_up, self.h_down)
+        t2 = self._hyst(t2, self.t2_h, self.h_up, self.h_down)
+        self.t1_h, self.t2_h = t1, t2
 
         # авария: streak подряд горячих снимков, разгон быстрым темпом —
-        # без мгновенного прыжка в 100 % (см. EMERG_STREAK/EMERG_RISE_MULT)
-        self._hot = self._hot + 1 if (tc >= self.e_cpu or tg >= self.e_gpu) else 0
+        # без мгновенного прыжка в 100 % (см. EMERG_STREAK/EMERG_RISE_MULT).
+        # Порог сверяем и по сырым значениям: фильтр сглаживания не должен
+        # откладывать реакцию на настоящий перегрев.
+        tc_raw = s.get("t_cpu_raw")
+        tg_raw = s.get("t_gpu_raw")
+        hot = (max(tc, tc_raw if tc_raw is not None else tc) >= self.e_cpu
+               or max(tg, tg_raw if tg_raw is not None else tg) >= self.e_gpu)
+        self._hot = self._hot + 1 if hot else 0
         emerg = self._hot >= self.EMERG_STREAK
         step = dt if dt > 0 else 1.0
         if emerg:
