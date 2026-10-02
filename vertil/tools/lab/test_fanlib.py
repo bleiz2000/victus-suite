@@ -201,3 +201,65 @@ def test_writable_requires_existing_attrs(fake_hwmon):
     os.chmod(str(fake_hwmon / "pwm1_enable"), 0o444)
     if os.geteuid() != 0:
         assert fans.writable is False, "атрибуты без записи — writable обязан быть False"
+
+
+# --------------------------------------------------------------------------- #
+# VRM: усиленная фильтрация шумного ACPI-прокси
+# --------------------------------------------------------------------------- #
+def test_vrm_filter_kills_spike_trains():
+    """Медиана-7 держится, пока выброс не продержится 4 снимка из 7."""
+    f = F.TempFilter(window=7, rise=100.0, fall=100.0)
+    # прогреваем окно, чтобы в нём были «холодные» значения
+    for v in (60,) * 8:
+        f.update(v)
+    # 3 подряд пика — окно ещё не сдвинулось (нужно 4 из 7)
+    out = [f.update(v) for v in (95, 95, 95)]
+    assert max(out) <= 60, "медиана-7 пропустила серию из трёх выбросов"
+    # четвёртый подряд — это уже не выброс, фильтр идёт вверх
+    assert f.update(95) > 60
+
+
+def test_vrm_filter_slew_is_slower_than_cpu():
+    """У VRM свой slew: за один снимок ≤4 °C вверх (у CPU/GPU — 12)."""
+    f = F.TempFilter(window=1, rise=4.0, fall=2.5)
+    f.update(60)
+    assert f.update(95) == 64
+    assert f.update(40) == 61.5          # спад не быстрее 2.5 °C/снимок
+
+
+def test_sensors_builds_stronger_vrm_filter(monkeypatch):
+    """Канал t_vrm обязан получить своё (более длинное) окно."""
+    monkeypatch.setattr(F, "find_hwmon", lambda chip, need=None: None)
+    preset = json.loads(json.dumps(F.load_preset()))
+    s = F.Sensors(preset)
+    vrm = s._filt["t_vrm"]
+    cpu = s._filt["t_cpu"]
+    assert vrm.window > cpu.window, "VRM-канал должен фильтроваться жёстче"
+    assert (vrm.rise, vrm.fall) < (cpu.rise, cpu.fall), \
+        "slew VRM должен быть медленнее, чем у CPU/GPU"
+
+
+def test_smart_vrm_temp_hysteresis_holds_jitter():
+    """Дрожание ±0.5 °C на VRM не двигает ни историю, ни оценку."""
+    preset = _preset(vrm_temp_hysteresis={"up": 1.5, "down": 2.5})
+    smart = F.Smart(preset, seed=(100, 100))
+    seen = set()
+    for tv in (60.0, 60.6, 60.1, 60.7, 60.2, 59.6, 60.3, 59.8):
+        smart.update(_sensor(tv=tv), 1.0)
+        seen.add(smart.tv_h)
+    assert seen == {60.0}, "гистерезис температуры VRM не гасит дрожание: %s" % seen
+
+    # настоящий разогрев ≥2.5 °C вниз / ≥1.5 °C вверх обязан пройти
+    smart.update(_sensor(tv=70.0), 1.0)
+    assert smart.tv_h == 70.0, "гистерезис не должен держать настоящий разогрев"
+    smart.update(_sensor(tv=55.0), 1.0)
+    assert smart.tv_h == 55.0, "гистерезис не должен держать настоящее остывание"
+
+
+def test_smart_vrm_hysteresis_disabled_by_zero():
+    """up=down=0 — поведение как до правки: температура проходит как есть."""
+    preset = _preset(vrm_temp_hysteresis={"up": 0, "down": 0})
+    smart = F.Smart(preset, seed=(100, 100))
+    smart.update(_sensor(tv=60.0), 1.0)
+    smart.update(_sensor(tv=60.4), 1.0)
+    assert smart.tv_h == 60.4

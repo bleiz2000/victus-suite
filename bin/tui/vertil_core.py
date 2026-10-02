@@ -51,6 +51,21 @@ _sensors = None
 _busy_prev = None
 
 
+def power_typewriter() -> bool:
+    """Правит ли вентиляторами «печатная машинка» (тихая BIOS-кривая).
+
+    Включённый режим питания тоже владеет вентиляторами, поэтому вкладка
+    «Вентиляторы» при открытии/пересборке (смена языка) и автопилот SMART
+    не должны перехватывать управление — иначе тихий режим отменяется тем
+    же, чем его включили: повторным монтированием виджета.
+    """
+    try:
+        from tui import core
+        return core.load_state().get("power_mode") == "typewriter"
+    except Exception:  # noqa: BLE001 — не роняем вентиляторы из-за чтения
+        return False
+
+
 def fan_mode_file() -> str:
     return os.path.join(vlog.state_dir(), FAN_MODE_FILE)
 

@@ -250,6 +250,40 @@ class VictusApp(App):
         padding-bottom: 1;
         border-bottom: solid #8a6f2a;
     }
+    /* чип состояния — железо, не последний клик */
+    #pwr-state {
+        width: auto;
+        min-width: 9;
+        height: 1;
+        padding: 0 1;
+        margin-right: 1;
+        text-align: center;
+        color: #8a8a8a;
+        background: #161616;
+    }
+    #pwr-state.on {
+        color: #0d1117;
+        background: #7ee787;
+    }
+    #pwr-state.warn {
+        color: #0d1117;
+        background: #ffd766;
+    }
+    #pwr-switch {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+    }
+    #pwr-switch .switch--slider {
+        color: #6a6a6a;
+        background: #1c1c1c;
+    }
+    #pwr-switch.-on .switch--slider {
+        color: #ffd766;
+    }
+    #pwr-switch:disabled {
+        opacity: 0.45;
+    }
     #pwr-hint {
         margin-top: 1;
         color: #9a9a9a;

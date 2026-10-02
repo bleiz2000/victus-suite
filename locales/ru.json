@@ -138,5 +138,19 @@
   "tui.pwr_applying": "переключаю питание…",
   "tui.pwr_on_ok": "печать включена: тихо и медленно",
   "tui.pwr_off_ok": "полная мощность восстановлена",
-  "tui.pwr_failed": "не получилось: {msg}"
+  "tui.pwr_failed": "не получилось: {msg}",
+  "tui.pwr_state_on": "ВКЛ",
+  "tui.pwr_state_off": "выкл",
+  "tui.pwr_state_partial": "частично",
+  "tui.pwr_partial": "режим включён не полностью — часть ручков вернулась",
+  "tui.pwr_desync": "состояние железа не изменилось — повторите",
+  "tui.pwr_radio": "Радио",
+  "tui.pwr_gpu_asleep": "dGPU спит",
+  "tui.pwr_watts": "{n} Вт",
+  "tui.pwr_mhz": "до {n} МГц",
+  "tui.pwr_turbo_on": "вкл",
+  "tui.pwr_turbo_off": "выкл",
+  "tui.pwr_hz": "{n} Гц",
+  "tui.pwr_gpu_limit": "лимит {n} Вт",
+  "tui.vertil_by_power": "вентиляторами управляет режим питания"
 }

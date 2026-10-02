@@ -320,8 +320,20 @@ class Sensors:
         window = int(fp.get("median_window", 3))
         rise = float(fp.get("rise_c", 12.0))
         fall = float(fp.get("fall_c", 6.0))
-        self._filt = {k: TempFilter(window, rise, fall)
-                      for k in ("t_cpu", "t_gpu", "t_vrm", "t_board")}
+        # VRM-канал — ACPI-прокси TCPU_PCI, он скачет и без нашей программы
+        # (прошивка, соседняя линия питания). Ему собственное окно и свой
+        # slew: медленнее и глубже, чем CPU/GPU/Board, чтобы микро-скачки
+        # не доезжали ни до dT/dt, ни до кривой оборотов.
+        vfp = fp.get("vrm") or {}
+        vwin = int(vfp.get("median_window", 7))
+        vrise = float(vfp.get("rise_c", 4.0))
+        vfall = float(vfp.get("fall_c", 2.5))
+        self._filt = {
+            "t_cpu": TempFilter(window, rise, fall),
+            "t_gpu": TempFilter(window, rise, fall),
+            "t_board": TempFilter(window, rise, fall),
+            "t_vrm": TempFilter(vwin, vrise, vfall),
+        }
 
     # -- helpers ------------------------------------------------------------ #
     @staticmethod
@@ -499,6 +511,12 @@ class Smart:
         hyst = p.get("hysteresis") or {}
         self.h_up = float(hyst.get("up", 0))
         self.h_down = float(hyst.get("down", 0))
+        # гистерезис самой температуры VRM (до оценки полосы): ±1 °C дрожания
+        # шумного TCPU_PCI не двигают score, пока отклонение не наберёт порог
+        tvh = p.get("vrm_temp_hysteresis") or {}
+        self.tv_up = float(tvh.get("up", 0))
+        self.tv_down = float(tvh.get("down", 0))
+        self.tv_h: float | None = None
         self.cap_cpu = p["caps"]["cpu_pwm_max"]
         self.cap_gpu = p["caps"]["gpu_pwm_max"]
         self.cap_over = p["caps"]["override_temp_c"]
@@ -547,6 +565,10 @@ class Smart:
         tc = s["t_cpu"] or 0.0
         tg = s["t_gpu"] or 0.0
         tv = s["t_vrm"] or 0.0
+        # Гистерезис температуры VRM ДО истории и оценки: дрожание датчика
+        # не двигает ни slope, ни score (up/down = 0 отключает, как раньше).
+        tv = self._hyst(tv, self.tv_h, self.tv_up, self.tv_down)
+        self.tv_h = tv
         self.hist.append((now, tc, tg, tv))
         self.hist = [h for h in self.hist if now - h[0] <= self.keep]
 

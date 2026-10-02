@@ -55,9 +55,19 @@ PER_CPU = (
      "powersave"),
     ("epp", "/sys/devices/system/cpu/cpu%d/cpufreq/energy_performance_preference",
      "power"),
+    # Жёсткий потолок частоты: «печатной машинке» 4.7 ГГц не нужны.
+    # Пишем ПОСЛЕ governor/EPP (иначе intel_pstate может перетереть), в снимок
+    # идёт своё значение каждого ядра — P- и E-ядра тут разные.
+    ("scaling_max_freq",
+     "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq",
+     "1800000"),
 )
 # минимальный PL2, ниже которого BIOS уже не опускается
 NVIDIA_PL_MIN_W = 20
+
+# внешние утилиты: только фиксированные argv, без shell
+IW = "/usr/bin/iw"
+RFKILL = "/usr/bin/rfkill"
 
 
 def read(path: str):
@@ -68,19 +78,32 @@ def read(path: str):
         return None
 
 
-def write(path: str, value: str):
-    """Возвращает None при успехе, текст ошибки — при провале."""
+def write(path: str, value: str, attempts: int = 1, delay: float = 0.2):
+    """Возвращает None при успехе, текст ошибки — при провале.
+
+    intel_pstate «проглатывает» запись scaling_max_freq сразу после смены
+    no_turbo/max_perf_pct: значение просто не меняется, но через доли секунды
+    начинает приниматься (замер: до 2 попыток, 0.25 с). Без ретрая это был бы
+    честный, но ложный отказ «все ядра отказали». Для обычных ручков
+    attempts=1 — там мгновенный отказ означает реальную проблему.
+    """
     if not os.path.exists(path):
         return "нет файла %s" % path
-    try:
-        with open(path, "w") as fh:
-            fh.write(value + "\n")
-    except OSError as exc:
-        return "%s: %s" % (path, exc.strerror or exc)
-    got = read(path)
-    if got is not None and got != value:
-        return "%s: прошивка отклонила %s (осталось %s)" % (path, value, got)
-    return None
+    last = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            with open(path, "w") as fh:
+                fh.write(value + "\n")
+        except OSError as exc:
+            last = "%s: %s" % (path, exc.strerror or exc)
+        else:
+            got = read(path)
+            if got is None or got == value:
+                return None
+            last = "%s: прошивка отклонила %s (осталось %s)" % (path, value, got)
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return last
 
 
 def cpu_ids() -> list[int]:
@@ -90,6 +113,19 @@ def cpu_ids() -> list[int]:
         if tail.isdigit():
             ids.append(int(tail))
     return ids
+
+
+def _cap_freq(cpu: int, want: str) -> str:
+    """Не выше того, что ядро разрешает прямо сейчас.
+
+    intel_pstate режет cpuinfo_max_freq по no_turbo/max_perf_pct; запись
+    выше порога отклоняется целиком (не «обрезается»), и мы бы получили
+    ложный отказ «все ядра отказали»."""
+    info = read("/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq" % cpu)
+    try:
+        return str(min(int(want), int(info)))
+    except (TypeError, ValueError):
+        return want
 
 
 def nvidia(args: list[str], timeout: float = 8.0):
@@ -131,6 +167,88 @@ def _nvidia_limits() -> dict:
     return res
 
 
+# ------------------------------------------------------ беспроводные модули
+def _run(argv, timeout=6.0):
+    """(rc, text) по фиксированному argv. Никакого shell, никаких аргументов
+    извне — белый-лист вызовов, как и весь этот бинарник."""
+    if not os.path.exists(argv[0]):
+        return None, "нет %s" % argv[0]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    return r.returncode, (r.stdout or r.stderr or "").strip()
+
+
+def wifi_ifaces() -> list:
+    """Интерфейсы с /sys/class/net/<iface>/wireless (wlan0, wlo1, …)."""
+    out = []
+    for p in glob.glob("/sys/class/net/*/wireless"):
+        parts = p.split(os.sep)
+        if len(parts) >= 3:
+            out.append(parts[-2])
+    return sorted(set(out))
+
+
+def wifi_get(iface: str):
+    """'on'/'off' либо None (iw не отвечает / нет интерфейса)."""
+    rc, out = _run([IW, "dev", iface, "get", "power_save"])
+    if rc != 0:
+        return None
+    for line in (out or "").splitlines():
+        tail = line.rsplit(":", 1)[-1].strip().lower()
+        if tail in ("on", "off"):
+            return tail
+    return None
+
+
+def wifi_set(iface: str, on: bool) -> str | None:
+    want = "on" if on else "off"
+    rc, out = _run([IW, "dev", iface, "set", "power_save", want])
+    if rc != 0:
+        return "iw: %s" % (out or "rc=%s" % rc)
+    got = wifi_get(iface)
+    if got is not None and got != want:
+        return "iw применил не сразу (сейчас %s)" % got
+    return None
+
+
+def bt_soft():
+    """'yes'/'no' (soft-block) либо None, если bluetooth-устройства нет."""
+    rc, out = _run([RFKILL, "list", "bluetooth"])
+    if rc != 0:
+        return None
+    for line in (out or "").splitlines():
+        if "soft blocked" in line.lower():
+            tail = line.rsplit(":", 1)[-1].strip().lower()
+            if tail in ("yes", "no"):
+                return tail
+    return None
+
+
+def bt_set(block: bool) -> str | None:
+    rc, out = _run([RFKILL, "block" if block else "unblock", "bluetooth"])
+    if rc != 0:
+        return "rfkill: %s" % (out or "rc=%s" % rc)
+    got = bt_soft()
+    if got is not None and got != ("yes" if block else "no"):
+        return "rfkill не подтвердил состояние (сейчас %s)" % got
+    return None
+
+
+def dgpu_runtime(wait: float = 0.0):
+    """runtime_status дискретки: 'suspended' = она уже в Runtime D3."""
+    path = "/sys/bus/pci/devices/%s/power/runtime_status" % DGPU_PCI
+    if not wait:
+        return read(path)
+    end = time.monotonic() + wait
+    while True:
+        val = read(path)
+        if val == "suspended" or time.monotonic() >= end:
+            return val
+        time.sleep(0.3)
+
+
 # ------------------------------------------------------------------ snapshot
 def snapshot() -> dict:
     """Текущее состояние всех ручков — для корректного отката."""
@@ -142,20 +260,58 @@ def snapshot() -> dict:
             "template": tmpl,
             "values": {str(i): read(tmpl % i) for i in cpu_ids()},
         }
-    snap["nvidia"] = _nvidia_limits()
+    # Не будим спящую дискретку только ради того, чтобы записать её лимит:
+    # усыпленная карта — результат, который мы и так добиваемся. Если она
+    # уже проснулась — снимаем лимит, тогда apply сможет его снизить.
+    if dgpu_runtime() == "suspended":
+        snap["nvidia"] = {"_asleep": True}
+    else:
+        snap["nvidia"] = _nvidia_limits()
+    # радио: что было ДО режима, чтобы restore вернул ровно это
+    iface = (wifi_ifaces() or [None])[0]
+    snap["wifi"] = {"iface": iface,
+                    "power_save": wifi_get(iface) if iface else None}
+    snap["bt"] = {"soft": bt_soft()}
+    snap["dgpu_runtime"] = dgpu_runtime()
     return snap
 
 
-def save_snapshot() -> dict:
-    snap = snapshot()
+def _write_snapshot(snap: dict) -> bool:
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(STATE_FILE, "w", encoding="utf-8") as fh:
             json.dump(snap, fh, ensure_ascii=False, indent=2)
         os.chmod(STATE_FILE, 0o600)
+        return True
     except OSError as exc:
         print("%s: не смог сохранить снимок: %s" % (TOOL, exc), file=sys.stderr)
+        return False
+
+
+def save_snapshot() -> dict:
+    snap = snapshot()
+    _write_snapshot(snap)
     return snap
+
+
+def looks_typewriter(knobs: dict) -> bool:
+    """Похоже ли состояние на уже включённую «печатную машинку».
+
+    Симптомы: выключен turbo, задавлен RAPL, прижат max_perf_pct или
+    выбран тихий платформенный профиль. Один из них — достаточное
+    подозрение, что мы смотрим НЕ baseline.
+    """
+    try:
+        if str(knobs.get("no_turbo") or "") == "1":
+            return True
+        pl1 = int(float(str(knobs.get("rapl_pl1") or "0").split()[0]))
+        if pl1 and pl1 <= 20000000:
+            return True
+        if int(float(str(knobs.get("max_perf_pct") or "100").split()[0])) <= 50:
+            return True
+    except (ValueError, TypeError):
+        pass
+    return str(knobs.get("platform_profile") or "") == "low-power"
 
 
 def snapshot_now() -> dict:
@@ -164,7 +320,28 @@ def snapshot_now() -> dict:
     Нужен ОТДЕЛЬНОЙ командой: power-profiles-daemon меняет platform_profile и
     EPP сам, поэтому снимок обязан быть сделан ДО первого изменения, а не в
     момент apply (иначе в точку отката попадает уже «печатная машинка»).
+
+    Две ловушки, которые иначе убивают откат:
+      * существующий снимок перетирается текущим (часто уже изменённым)
+        состоянием — restore начинает «возвращать» печатную машинку;
+      * снимок снят с уже изменённой системы (ручной apply, падение TUI).
+    Поэтому команда идемпотентна и отказывается работать с изменённой системой.
     """
+    have = load_snapshot()
+    if have is not None:
+        return {"mode": "snapshot", "applied": [],
+                "skipped": ["точка отката уже есть — не перетираю"],
+                "failed": [], "knobs": have.get("knobs")}
+    knobs = {name: read(path) for name, (_kind, path, _val) in TYPEWRITER.items()}
+    if looks_typewriter(knobs):
+        return {"mode": "snapshot", "applied": [], "skipped": [],
+                "failed": ["система уже в режиме печатной машинки "
+                           "(%s) — baseline не записан"
+                           % ", ".join("%s=%s" % (k, v) for k, v in knobs.items()
+                                       if v is not None and
+                                       k in ("no_turbo", "rapl_pl1",
+                                             "platform_profile"))],
+                "knobs": knobs}
     snap = save_snapshot()
     return {"mode": "snapshot", "applied": ["точка отката сохранена"],
             "skipped": [], "failed": [], "knobs": snap.get("knobs")}
@@ -212,48 +389,98 @@ def apply_typewriter() -> dict:
             res["skipped"].append("%s: нет cpu*/cpufreq" % name)
             continue
         ok = bad = 0
+        first_err = ""
+        written = set()
         for i in ids:
             path = tmpl % i
+            want = value
+            if name == "scaling_max_freq":
+                want = _cap_freq(i, value)
             if read(path) is None:
                 continue
-            err = write(path, value)
+            # частотным ручкам нужен ретрай (см. write): intel_pstate
+            # иногда не берёт запись сразу после no_turbo/max_perf_pct
+            err = write(path, want, attempts=4)
             if err:
                 bad += 1
+                first_err = first_err or err
             else:
                 ok += 1
-                targets.append(("%s[cpu%d]" % (name, i), path, value))
+                written.add(want)
+                targets.append(("%s[cpu%d]" % (name, i), path, want))
         if ok:
-            res["applied"].append("%s=%s (%d cpu)" % (name, value, ok))
+            # ядра могут упираться в разные cpuinfo_max_freq — показываем
+            # фактически выставленное, а не задуманное
+            shown = written.pop() if len(written) == 1 else                 "%s..%s" % (min(written), max(written))
+            res["applied"].append("%s=%s (%d cpu)" % (name, shown, ok))
         if bad:
-            res["failed"].append("%s: %d ядер отказали" % (name, bad))
+            res["failed"].append("%s: %d ядер отказали%s"
+                                 % (name, bad, " — %s" % first_err[:90]
+                                    if first_err else ""))
         if not ok and not bad:
             res["skipped"].append("%s: нет %s" % (name, tmpl % 0))
 
     # NVIDIA: persistence off + потолок мощности (дискретка уходит в сон,
-    # а если проснётся — ей разрешено только %d Вт)
+    # а если проснётся — ей разрешено только %d Вт).
+    # Команды пропускаются, когда результат был бы тождественным: каждый
+    # вызов nvidia-smi будит дискретку, ради которой мы всё и делаем.
     saved = (snap.get("nvidia") or {})
-    rc, out = nvidia(["-pm", "0"])
-    if rc is None:
-        res["skipped"].append("nvidia: нет nvidia-smi")
-    elif rc != 0 or _nvidia_warn(out):
-        res["failed"].append("nvidia: не смог выключить persistence mode (%s)"
-                             % (out or "rc=%s" % rc).strip()[:80])
+    if saved.get("_asleep"):
+        res["skipped"].append(
+            "nvidia: дискретка была в Runtime D3 — persistence/лимит не трогали")
+    elif str(saved.get("persistence_mode") or "").strip().lower() in ("0", "off",
+                                                                      "disabled"):
+        res["applied"].append("nvidia persistence=0 (уже так)")
     else:
-        res["applied"].append("nvidia persistence=0")
+        rc, out = nvidia(["-pm", "0"])
+        if rc is None:
+            res["skipped"].append("nvidia: нет nvidia-smi")
+        elif rc != 0 or _nvidia_warn(out):
+            res["failed"].append("nvidia: не смог выключить persistence mode (%s)"
+                                 % (out or "rc=%s" % rc).strip()[:80])
+        else:
+            res["applied"].append("nvidia persistence=0")
     try:
         cur_pl = float((saved.get("power_limit") or "0").split()[0])
     except (ValueError, AttributeError, IndexError):
         cur_pl = 0.0
     target = min(cur_pl, NVIDIA_PL_MIN_W) or NVIDIA_PL_MIN_W
-    rc, out = nvidia(["-pl", "%.1f" % target])
-    if rc is None:
-        pass
-    elif rc != 0 or _nvidia_warn(out):
-        # драйвер отвечает rc=0 и текстом «not supported» — это не успех
-        res["skipped"].append("nvidia -pl: %s"
-                              % ((out or "отказ").strip().splitlines()[:1]) [0][:90])
+    if saved.get("_asleep") or not cur_pl:
+        pass                                # уже пропущено/нет данных
+    elif cur_pl <= NVIDIA_PL_MIN_W:
+        # снимок говорит, что лимит и так не выше потолка — трогать нечего
+        res["applied"].append("nvidia power_limit=%.0fW (уже так)" % cur_pl)
     else:
-        res["applied"].append("nvidia power_limit=%.0fW" % target)
+        rc, out = nvidia(["-pl", "%.1f" % target])
+        if rc is None:
+            pass
+        elif rc != 0 or _nvidia_warn(out):
+            # драйвер отвечает rc=0 и текстом «not supported» — это не успех
+            res["skipped"].append("nvidia -pl: %s"
+                                  % ((out or "отказ").strip().splitlines()[:1])[0][:90])
+        else:
+            res["applied"].append("nvidia power_limit=%.0fW" % target)
+            # restore обязан вернуть лимит, даже если к тому моменту дискретка
+            # уже уснула — иначе пропустим восстановление «по спящей»
+            snap.setdefault("nvidia", {})["_pl_changed"] = True
+            _write_snapshot(snap)
+
+    # --- беспроводные модули: wifi power-save + bluetooth rfkill -----------
+    iface = (wifi_ifaces() or [None])[0]
+    if not iface:
+        res["skipped"].append("wifi: нет беспроводного интерфейса")
+    else:
+        err = wifi_set(iface, True)
+        res["applied" if err is None else "failed"].append(
+            "wifi power_save=on (%s)" % iface if err is None
+            else "wifi: %s" % err)
+    if bt_soft() is None:
+        res["skipped"].append("bluetooth: устройства rfkill не найдено")
+    else:
+        err = bt_set(True)
+        res["applied" if err is None else "failed"].append(
+            "bluetooth soft-block (rfkill)" if err is None
+            else "bluetooth: %s" % err)
 
     # EC имеет право перетереть наши записи (platform_profile, например,
     # возвращает RAPL к своим 55 Вт) — перечитываем и честно рапортуем.
@@ -267,9 +494,21 @@ def apply_typewriter() -> dict:
                 res["failed"].append("%s: прошивка откатила %s (вернулось %s)"
                                      % (name, value, got))
 
+    # --- дискретка: дождаться Runtime D3 --------------------------------------
+    # nvidia-smi поднимает карту на 5–15 с, поэтому ждём недолго: даже если
+    # не успели, держатели (Hyprland, voxtype) НЕ мешают усыпанию — карта
+    # уходит в Runtime D3 сама после idle-таймаута, и вкладка показывает это.
+    runtime = dgpu_runtime(wait=4.0)
+    if runtime == "suspended":
+        res["applied"].append("dGPU runtime=suspended (Runtime D3)")
+    elif runtime is None:
+        res["skipped"].append("dGPU: нет sysfs питания на %s" % DGPU_PCI)
+    else:
+        res["skipped"].append(
+            "dGPU ещё %s — уйдёт в Runtime D3 сама после idle" % runtime)
+
     res["snapshot"] = bool(snap)
-    res["dgpu_runtime"] = read(
-        "/sys/bus/pci/devices/%s/power/runtime_status" % DGPU_PCI)
+    res["dgpu_runtime"] = runtime
     return res
 
 
@@ -288,22 +527,10 @@ def restore() -> dict:
                            % STATE_FILE]}
     res = {"mode": "restore", "applied": [], "skipped": [], "failed": []}
 
-    # сначала мульти-ядерные (у них шаблон в снимке), потом одиночные
-    for name, data in (snap.get("per_cpu") or {}).items():
-        tmpl = data.get("template")
-        for idx, val in (data.get("values") or {}).items():
-            if not tmpl or val is None:
-                continue
-            path = tmpl % int(idx)
-            if read(path) is None:
-                res["skipped"].append(path)
-                continue
-            if read(path) == val:
-                continue            # уже в прошлом состоянии — не дёргаем прошивку
-            err = write(path, val)
-            (res["failed"] if err else res["applied"]).append(
-                "%s=%s" % (path, val) if not err else err)
-
+    # ПОРЯДОК ОБРАТНЫЙ К apply и это важно: сначала «глобальные» ручки
+    # (no_turbo, max_perf_pct, platform_profile) — они возвращают ядрам
+    # полный диапазон частот, иначе intel_pstate не примет запись
+    # scaling_max_freq из снимка и откат был бы неполным.
     saved_knobs = snap.get("knobs") or {}
     for name, (_kind, path, _val) in TYPEWRITER.items():
         val = saved_knobs.get(name)
@@ -319,22 +546,71 @@ def restore() -> dict:
         (res["failed"] if err else res["applied"]).append(
             "%s=%s" % (name, val) if not err else err)
 
+    for name, data in (snap.get("per_cpu") or {}).items():
+        tmpl = data.get("template")
+        for idx, val in (data.get("values") or {}).items():
+            if not tmpl or val is None:
+                continue
+            path = tmpl % int(idx)
+            if read(path) is None:
+                res["skipped"].append(path)
+                continue
+            if read(path) == val:
+                continue            # уже в прошлом состоянии — не дёргаем прошивку
+            # тот же ретрай, что при включении: частоты не всегда
+            # берутся с первого раза
+            err = write(path, val, attempts=4)
+            (res["failed"] if err else res["applied"]).append(
+                "%s=%s" % (path, val) if not err else err)
+
     nv = snap.get("nvidia") or {}
-    cur = _nvidia_limits()
-    if nv.get("power_limit") and cur.get("power_limit") != nv["power_limit"]:
+    # Будим nvidia-smi только если что-то реально меняли: каждый запрос
+    # поднимает дискретку, а откат в большинстве случаев — возврат к
+    # «и так уже было». pm менялся при включении лишь если он был Enabled.
+    want_pl = bool(nv.get("_pl_changed"))
+    want_pm = str(nv.get("persistence_mode") or "").lower().startswith("e")
+    need_nv = want_pl or want_pm
+    if not need_nv:
+        res["skipped"].append("nvidia: лимиты не менялись — дискретку не будим")
+    cur = _nvidia_limits() if need_nv else {}
+    if want_pl and cur.get("power_limit") != nv["power_limit"]:
         rc, out = nvidia(["-pl", str(nv["power_limit"])])
-        if rc == 0:
+        if rc == 0 and _nvidia_warn(out):
+            res["skipped"].append("nvidia -pl: прошивка не поддерживает лимит")
+        elif rc == 0:
             res["applied"].append("nvidia power_limit=%s" % nv["power_limit"])
         elif rc is not None:
             res["failed"].append("nvidia -pl: %s" % (out or "отказ"))
-    if nv.get("persistence_mode") and \
+    if want_pm and \
             nv["persistence_mode"].lower() != (cur.get("persistence_mode") or "").lower():
-        want_on = nv["persistence_mode"].lower().startswith("e")
-        rc, out = nvidia(["-pm", "1" if want_on else "0"])
+        rc, out = nvidia(["-pm", "1"])
         if rc == 0:
             res["applied"].append("nvidia persistence=%s" % nv["persistence_mode"])
         elif rc is not None:
             res["failed"].append("nvidia -pm: %s" % (out or "отказ"))
+
+    # --- радио: вернуть ровно то, что было в снимке -------------------------
+    wif = snap.get("wifi") or {}
+    iface = wif.get("iface") or (wifi_ifaces() or [None])[0]
+    saved_ps = wif.get("power_save")
+    if not iface:
+        res["skipped"].append("wifi: нет интерфейса")
+    elif saved_ps not in ("on", "off"):
+        res["skipped"].append("wifi: в снимке не записано исходное состояние")
+    else:
+        err = wifi_set(iface, saved_ps == "on")
+        res["applied" if err is None else "failed"].append(
+            "wifi power_save=%s (%s)" % (saved_ps, iface) if err is None
+            else "wifi: %s" % err)
+
+    saved_bt = (snap.get("bt") or {}).get("soft")
+    if saved_bt not in ("yes", "no"):
+        res["skipped"].append("bluetooth: в снимке не записано исходное состояние")
+    else:
+        err = bt_set(saved_bt == "yes")
+        res["applied" if err is None else "failed"].append(
+            "bluetooth soft-block=%s" % saved_bt if err is None
+            else "bluetooth: %s" % err)
 
     try:
         os.remove(STATE_FILE)
@@ -361,7 +637,14 @@ def mux_set(mode: str) -> dict:
             "skipped": [], "failed": [], "reboot_required": True}
 
 
-def status() -> dict:
+def status(with_nvidia: bool = False) -> dict:
+    """Снимок ручков.
+
+    По умолчанию БЕЗ запросов nvidia-smi: каждый такой запрос поднимает
+    дискретку из Runtime D3, и обычный опрос раз в 5 с (вкладка «Питание»)
+    свёл бы на нет весь смысл усыпления. Флаг --nvidia — осознанное
+    пробуждение, когда карта действительно нужна.
+    """
     st = {"tool": TOOL, "euid": os.geteuid()}
     st["platform_profile"] = read(PLATFORM_PROFILE)
     st["platform_profile_choices"] = read(PLATFORM_PROFILE + "_choices")
@@ -373,17 +656,30 @@ def status() -> dict:
         "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")
     st["rapl_pl1_w"] = _watts(read(os.path.join(RAPL, "constraint_0_power_limit_uw")))
     st["rapl_pl2_w"] = _watts(read(os.path.join(RAPL, "constraint_1_power_limit_uw")))
+    st["max_freq_mhz"] = _mhz(read(
+        "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq"))
     st["dgpu_control"] = read(
         "/sys/bus/pci/devices/%s/power/control" % DGPU_PCI)
-    st["dgpu_runtime"] = read(
-        "/sys/bus/pci/devices/%s/power/runtime_status" % DGPU_PCI)
+    runtime = dgpu_runtime()
+    st["dgpu_runtime"] = runtime
     st["mux"] = read(MUX_PATH)
-    nv = _nvidia_limits()
-    st["nvidia_pl_w"] = _watts(nv.get("power_limit"))
-    st["nvidia_persistence"] = nv.get("persistence_mode")
-    rc, out = nvidia(["--query-gpu=temperature.gpu",
-                      "--format=csv,noheader,nounits"])
-    st["nvidia_temp"] = out.strip() if rc == 0 and out else None
+    iface = (wifi_ifaces() or [None])[0]
+    st["wifi_iface"] = iface
+    st["wifi_power_save"] = wifi_get(iface) if iface else None
+    st["bt_soft"] = bt_soft()
+    if with_nvidia and runtime != "suspended":
+        nv = _nvidia_limits()
+        st["nvidia_pl_w"] = _watts(nv.get("power_limit"))
+        st["nvidia_persistence"] = nv.get("persistence_mode")
+        rc, out = nvidia(["--query-gpu=temperature.gpu",
+                          "--format=csv,noheader,nounits"])
+        st["nvidia_temp"] = out.strip() if rc == 0 and out else None
+        st["nvidia_quiet"] = False
+    else:
+        st["nvidia_pl_w"] = None
+        st["nvidia_persistence"] = None
+        st["nvidia_temp"] = None
+        st["nvidia_quiet"] = True
     st["typewriter_saved"] = load_snapshot() is not None
     return st
 
@@ -391,6 +687,14 @@ def status() -> dict:
 def _watts(v):
     try:
         return round(float(v) / 1e6, 1) if v and float(v) > 1000 else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mhz(v):
+    """scaling_max_freq отдаёт кГц — показываем МГц."""
+    try:
+        return int(round(float(v) / 1000.0))
     except (TypeError, ValueError):
         return None
 
@@ -421,7 +725,9 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="вывод JSON")
     sub = ap.add_subparsers(dest="cmd")
 
-    sub.add_parser("status", parents=[common])
+    p_status = sub.add_parser("status", parents=[common])
+    p_status.add_argument("--nvidia", action="store_true",
+                          help="опросить nvidia-smi (будит дискретку)")
     sub.add_parser("restore", parents=[common])
     sub.add_parser("snapshot", parents=[common])
     p_apply = sub.add_parser("apply", parents=[common])
@@ -436,7 +742,7 @@ def main(argv=None) -> int:
         return 2
 
     if a.cmd == "status":
-        st = status()
+        st = status(with_nvidia=bool(getattr(a, "nvidia", False)))
         if a.json:
             print(json.dumps(st, ensure_ascii=False))
         else:

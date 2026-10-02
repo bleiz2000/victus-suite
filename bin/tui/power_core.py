@@ -212,12 +212,18 @@ def set_typewriter(on: bool) -> dict:
         # снимать позже, в откат попадает уже «печатная машинка».
         if not os.path.exists(PREV_FILE):
             _save_prev({"ppd": ppd_get(), "monitor": monitor_info(),
+                        "fans": (fan_status() or {}).get("mode"),
                         "ppd_done": False})
             data, err = _json(["sudo", "-n", POWER, "snapshot", "--json"])
             if data is None:
                 _step(res, "точка отката", False, err)
+            elif data.get("failed"):
+                # хелпер отказался: снимок уже есть или система уже изменена.
+                # Это НЕ успех — без честного baseline откат будет врать.
+                _step(res, "точка отката", False, data["failed"][0])
             else:
-                _step(res, "точка отката сохранена", True)
+                _step(res, "точка отката сохранена"
+                      if not data.get("skipped") else data["skipped"][0], True)
     prev = _load_prev() or {}
 
     # ПОРЯВОК ВАЖЕН: запись platform_profile (в т.ч. через power-profiles-daemon)
@@ -253,15 +259,23 @@ def set_typewriter(on: bool) -> dict:
                       set_refresh(mon, saved))
 
     # --- 3. тихие вентиляторы (BIOS-кривая = пассивный режим на простое) ----
-    rc, out, err = run(["sudo", "-n", KBD, "fans", "set-mode", FAN_QUIET_MODE])
+    # при выключении возвращаем прежний режим, а не оставляем тихий:
+    # ТЗ требует полного отката, а «AUTO» — это тоже изменение.
+    fan_mode = FAN_QUIET_MODE if on else str(prev.get("fans") or FAN_QUIET_MODE)
+    rc, out, err = run(["sudo", "-n", KBD, "fans", "set-mode", fan_mode])
     if rc == 0:
-        _step(res, "Вентиляторы→тихо (BIOS AUTO)", True)
+        _step(res, "Вентиляторы→%s (BIOS AUTO)" % ("тихо" if on else "прежний режим")
+              if fan_mode == FAN_QUIET_MODE else
+              "Вентиляторы→режим %s" % fan_mode, True)
     else:
-        _step(res, "Вентиляторы→тихо", False, (err or out).strip()[:80])
+        _step(res, "Вентиляторы→режим %s" % fan_mode, False,
+              (err or out).strip()[:80])
 
     # --- 4. root-часть: частоты, turbo, RAPL, дискретка, MUX (последней) ----
+    # щедрый таймаут: хелпер ждёт ухода дискретки в Runtime D3 и ретраит
+    # частотные ручки (intel_pstate не берёт запись с первого раза)
     args = ["apply", "typewriter"] if on else ["restore"]
-    data, err = _json(["sudo", "-n", POWER] + args + ["--json"])
+    data, err = _json(["sudo", "-n", POWER] + args + ["--json"], timeout=45.0)
     if data is None:
         _step(res, "victus-power %s" % args[0], False, err)
     else:
@@ -271,7 +285,10 @@ def set_typewriter(on: bool) -> dict:
 
     if on:
         _save_prev(prev)
-    else:
+    elif not res["failed"]:
+        # Прошлую точку стираем только после ЧИСТНОГО отката: если корневой
+        # снимок потерялся, ppd/герцовка в файле — единственные оставшиеся
+        # следы baseline.
         try:
             os.remove(PREV_FILE)
         except OSError:
@@ -285,13 +302,40 @@ def _fmt(hz) -> str:
     return str(int(hz)) if abs(hz - round(hz)) < 0.05 else ("%.1f" % hz)
 
 
-def is_active() -> bool:
-    """Режим включён? По состоянию root-снимка (он делается только apply)."""
+# Режим считаем ПО ЖЕЛЕЗУ, а не по файлу состояния TUI: состояние на диске
+# врёт после сбоя, ручного `victus-power restore` или частичного apply.
+MODE_NORMAL = "normal"
+MODE_TYPEWRITER = "typewriter"
+MODE_PARTIAL = "partial"
+
+
+def mode(root: dict | None) -> str:
+    """Реальный режим системы.
+
+    normal     — точка отката отсутствует: режима нет
+    typewriter — точка отката есть И жёсткие ручки действительно утоплены
+    partial    — точка отката есть, но часть ручков вернулась (прошивка
+                 перетёрла RAPL, apply оборвался) — UI обязан это показать
+    """
+    if root is None:
+        # sudo недоступен: единственный ориентир — пользовательская точка
+        return MODE_TYPEWRITER if _load_prev() else MODE_NORMAL
+    if not root.get("typewriter_saved"):
+        return MODE_NORMAL
+    turbo_off = str(root.get("no_turbo")) == "1"
     try:
-        with open(PREV_FILE, encoding="utf-8") as fh:
-            return bool(json.load(fh))
-    except (OSError, ValueError):
-        return False
+        pl1 = float(root.get("rapl_pl1_w") or 99)
+    except (TypeError, ValueError):
+        pl1 = 99.0
+    return MODE_TYPEWRITER if (turbo_off and pl1 <= 20.0) else MODE_PARTIAL
+
+
+def is_active() -> bool:
+    """Режим включён? По root-снимку (он появляется только при apply)."""
+    root = root_status()
+    if root is not None:
+        return bool(root.get("typewriter_saved"))
+    return bool(_load_prev())
 
 
 def status() -> dict:
@@ -303,5 +347,6 @@ def status() -> dict:
     root = root_status()
     st["root"] = root
     st["root_ok"] = root is not None
-    st["typewriter"] = is_active()
+    st["mode"] = mode(root)
+    st["typewriter"] = st["mode"] != MODE_NORMAL
     return st

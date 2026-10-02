@@ -248,6 +248,17 @@ class VertilTab(Vertical):
         """
         choice = vertil_core.fan_mode_load()
         hw = snap.get("mode_name")
+        # Режим питания уже держит тихую BIOS-кривую: свой выбор применяем
+        # только когда «печатной машинки» нет, иначе открытие вкладки или
+        # пересборка экрана (смена языка) отменит только что включённый режим.
+        if vertil_core.power_typewriter():
+            self._mode = hw if hw in ("manual", "auto", "max") else "auto"
+            self._setpoint = [snap.get("pwm1"), snap.get("pwm2")]
+            self._target = list(self._setpoint)
+            self._set_sliders_enabled(False)
+            self._sync_mode_buttons()
+            self._set_status(t("tui.vertil_by_power"))
+            return
         if choice in (None, "smart"):
             if self.autopilot:
                 return
@@ -293,6 +304,10 @@ class VertilTab(Vertical):
         now = time.monotonic()
         dt = max(0.0, now - self._last_step)
         self._last_step = now
+        # Пишем только когда вентиляторы наши: set_pwm сам переходит в MANUAL
+        # и мгновенно отменил бы тихий режим «печатной машинки».
+        if vertil_core.power_typewriter():
+            return
         if self._smart is None:
             self._smart = vertil_core.make_smart(
                 seed=(snap.get("pwm1") or 79, snap.get("pwm2") or 92)

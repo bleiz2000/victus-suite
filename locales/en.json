@@ -138,5 +138,19 @@
   "tui.pwr_applying": "switching power…",
   "tui.pwr_on_ok": "typewriter on: quiet and slow",
   "tui.pwr_off_ok": "full power restored",
-  "tui.pwr_failed": "failed: {msg}"
+  "tui.pwr_failed": "failed: {msg}",
+  "tui.pwr_state_on": "ON",
+  "tui.pwr_state_off": "off",
+  "tui.pwr_state_partial": "partial",
+  "tui.pwr_partial": "mode is only partially on — some knobs reverted",
+  "tui.pwr_desync": "hardware state did not change — try again",
+  "tui.pwr_radio": "Radio",
+  "tui.pwr_gpu_asleep": "dGPU asleep",
+  "tui.pwr_watts": "{n} W",
+  "tui.pwr_mhz": "up to {n} MHz",
+  "tui.pwr_turbo_on": "on",
+  "tui.pwr_turbo_off": "off",
+  "tui.pwr_hz": "{n} Hz",
+  "tui.pwr_gpu_limit": "limit {n} W",
+  "tui.vertil_by_power": "fans are driven by the power mode"
 }
