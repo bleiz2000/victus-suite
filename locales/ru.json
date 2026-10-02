@@ -155,5 +155,11 @@
   "tui.vertil_by_power": "вентиляторами управляет режим питания",
   "tui.pwr_dur": "{h} ч {m} мин",
   "tui.pwr_dur_min": "{m} мин",
-  "tui.pwr_dur_days": "{d} дн {h} ч"
+  "tui.pwr_dur_days": "{d} дн {h} ч",
+  "tui.pwr_watts_apply": "Ставлю потолок {n} Вт…",
+  "tui.pwr_watts_fail": "Не получилось: {msg}",
+  "tui.pwr_watts_lbl": "Потолок мощности (Вт)",
+  "tui.pwr_watts_now": "Сейчас потолок {n} Вт: не даёт процессору жрать больше, пока режим включён.",
+  "tui.pwr_watts_off": "Потолок 5–25 Вт действует только при включённой печатной машинке.",
+  "tui.pwr_watts_ok": "Потолок {n} Вт применён"
 }

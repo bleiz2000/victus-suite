@@ -300,6 +300,38 @@ class VictusApp(App):
         margin-top: 1;
         color: #9a9a9a;
     }
+    #pwr-watts-block {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        padding: 0 1;
+        border: tall #2a2a2a;
+        background: #131313;
+    }
+    #pwr-watts-cap {
+        color: #d0d0d0;
+        height: 1;
+    }
+    #pwr-watts {
+        width: 100%;
+        height: 1;
+        color: #ffd766;
+        background: #0d1117;
+    }
+    #pwr-watts:focus {
+        border-top: none;
+        border-bottom: none;
+        background: #171307;
+        color: #ffe28a;
+    }
+    #pwr-watts:disabled {
+        color: #6a6a6a;
+        background: #161616;
+    }
+    #pwr-watts-hint {
+        color: #9a9a9a;
+        height: 1;
+    }
     #p-readouts {
         width: 100%;
         height: auto;

@@ -20,9 +20,10 @@ from __future__ import annotations
 import asyncio
 
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Label, Static, Switch
 
@@ -66,6 +67,62 @@ def _fmt_hz(hz) -> str:
     return "%d" % hz if abs(hz - round(hz)) < 0.05 else "%.1f" % hz
 
 
+class WattsBar(Static):
+    """Ползунок потолка мощности CPU 5..25 Вт.
+
+    В Textual 8.2.8 встроенного Slider нет (в `textual.widgets` он
+    отсутствует), поэтому рисуем свой: клик по дорожке, ←/→ и ↑/↓ на 1 Вт,
+    PgUp/PgDn на 5 Вт, Home/End — к краям. Программная запись `.value =`
+    события не шлёт — Changed появляется только от рук пользователя.
+    """
+    MIN, MAX = 5, 25
+    can_focus = True
+    value = reactive(15)
+
+    class Changed(Message):
+        def __init__(self, bar: "WattsBar", value: int) -> None:
+            super().__init__()
+            self.bar = bar
+            self.value = value
+
+    def render(self):
+        span = max(8, (self.size.width or 40) - 7)
+        frac = (self.value - self.MIN) / (self.MAX - self.MIN)
+        n = max(0, min(span, int(round(frac * span))))
+        return Text("%s %2d Вт" % ("█" * n + "░" * (span - n), self.value))
+
+    def _set(self, want, notify: bool = True) -> None:
+        want = max(self.MIN, min(self.MAX, int(want)))
+        if want == self.value:
+            return
+        self.value = want
+        if notify:
+            self.post_message(self.Changed(self, want))
+
+    def on_click(self, event: events.Click) -> None:
+        self.focus()
+        span = max(1, (self.size.width or 40) - 7)
+        frac = max(0.0, min(1.0, event.offset.x / float(span)))
+        self._set(self.MIN + round(frac * (self.MAX - self.MIN)))
+
+    def on_key(self, event: events.Key) -> None:
+        deltas = {"left": -1, "down": -1, "right": 1, "up": 1,
+                  "pagedown": -5, "pageup": 5}
+        if event.key in deltas:
+            self._set(self.value + deltas[event.key])
+            event.stop()
+        elif event.key == "home":
+            self._set(self.MIN); event.stop()
+        elif event.key == "end":
+            self._set(self.MAX); event.stop()
+
+    def on_scroll_up(self, event: events.ScrollUp) -> None:
+        self._set(self.value + 1)
+
+    def on_scroll_down(self, event: events.ScrollDown) -> None:
+        self._set(self.value - 1)
+
+
 class PowerTab(Vertical):
     typewriter = reactive(False)
     _rebuilding = False
@@ -76,7 +133,11 @@ class PowerTab(Vertical):
         self.typewriter = state.get("power_mode") == "typewriter"
         self._st = {}
         self._busy = False
+        self._mode_busy = False
         self._poll = None
+        self._watts_syncing = False
+        self._watts_applied = 15
+        self._watts_pending = None
 
     # --- композиция ---------------------------------------------------------
 
@@ -92,6 +153,10 @@ class PowerTab(Vertical):
                         yield Static(t("tui.pwr_state_off"), id="pwr-state")
                         yield Switch(value=self.typewriter, id="pwr-switch")
                     yield Static(self._hint(), id="pwr-hint", classes="vblock")
+                    with Vertical(classes="vblock", id="pwr-watts-block"):
+                        yield Static("", id="pwr-watts-cap")
+                        yield WattsBar(id="pwr-watts")
+                        yield Static(t("tui.pwr_watts_off"), id="pwr-watts-hint")
                 with Vertical(id="p-readouts"):
                     yield Static("", id="p-lines", classes="vblock")
         with Horizontal(id="pstatusline"):
@@ -160,6 +225,7 @@ class PowerTab(Vertical):
             t("tui.pwr_hint_typewriter")
             if mode == power_core.MODE_TYPEWRITER
             else t("tui.pwr_hint_full")))
+        self._sync_watts(st, mode)
         self._render_lines(self._st)
 
         # состояние на диске должно отражать железо, а не последний клик
@@ -182,6 +248,7 @@ class PowerTab(Vertical):
         if self._busy:
             return
         self._busy = True
+        self._mode_busy = True
         sw = self.query_one("#pwr-switch", Switch)
         sw.disabled = True                   # никаких повторных кликов в полёте
         self._set_status(t("tui.pwr_applying"))
@@ -194,6 +261,7 @@ class PowerTab(Vertical):
             self._sync(st, announce=t("tui.pwr_failed", msg=str(e)[:80]),
                        error=True)
             self._busy = False
+            self._mode_busy = False
             sw.disabled = False
             return
 
@@ -215,8 +283,9 @@ class PowerTab(Vertical):
             announce = t("tui.pwr_on_ok") if on else t("tui.pwr_off_ok")
             error, warn = False, False
 
-        self._sync(st, announce=announce, error=error, warn=warn)
         self._busy = False
+        self._mode_busy = False
+        self._sync(st, announce=announce, error=error, warn=warn)
         sw.disabled = False
 
     def on_switch_changed(self, event):
@@ -226,6 +295,95 @@ class PowerTab(Vertical):
         if want == self.typewriter:
             return                          # это мы сами перетянули тумблер
         self._toggle(want)
+
+    # --- ползунок потолка мощности -----------------------------------------
+
+    def _sync_watts(self, st: dict, mode: str) -> None:
+        """Слайдер 5..25 Вт: работает ТОЛЬКО при включённой печатной
+        машинке, значение тянется из железа (rapl_pl1), а не из последнего
+        перетаскивания."""
+        try:
+            sl = self.query_one("#pwr-watts", WattsBar)
+            cap = self.query_one("#pwr-watts-cap", Static)
+            hint = self.query_one("#pwr-watts-hint", Static)
+        except Exception:                                  # noqa: BLE001
+            return
+        # гасим только на время переворота тумблера: _busy включается и при
+        # записи RAPL, а если погасить ползунок в этот момент, Textual снимет
+        # с него фокус — и серия «стрелка→» вырождается в одно нажатие
+        on = mode == power_core.MODE_TYPEWRITER and not self._mode_busy
+        # status() кладёт корневой снимок в st["root"]
+        pl1 = (st.get("root") or {}).get("rapl_pl1_w")
+        try:
+            want = max(5, min(25, int(round(float(pl1)))))
+        except (TypeError, ValueError):
+            want = 15
+        cap.update(Text(t("tui.pwr_watts_lbl")))
+        hint.update(Text(t("tui.pwr_watts_now", n=want) if on
+                         else t("tui.pwr_watts_off")))
+        if abs(float(sl.value) - want) > 0.5:
+            # это значение подтянуто из железа, а не перетянуто рукой
+            self._watts_syncing = True
+            try:
+                sl.value = want
+                self._watts_applied = want
+            finally:
+                self._watts_syncing = False
+        sl.disabled = not on
+
+    def on_watts_bar_changed(self, event: WattsBar.Changed):
+        if self._busy or self._watts_syncing:
+            return
+        if (self._st or {}).get("mode") != power_core.MODE_TYPEWRITER:
+            return                      # режим выключен — ползунок мёртв
+        want = int(event.value)
+        if want == self._watts_applied:
+            return                      # это мы сами подтянули из железа
+        if self._busy:
+            # правка пришла, пока root ещё пишет прошлое значение:
+            # запоминаем и применяем последней, а не выбрасываем (иначе
+            # серия быстрых «стрелка→» вырождается в одно нажатие)
+            self._watts_pending = want
+            return
+        self._apply_watts(want)
+
+    @work(exclusive=True, group="power-watts")
+    async def _apply_watts(self, want: int):
+        self._busy = True
+        # ползунок НЕ блокируем: он остаётся живым и копит _watts_pending
+        self._watts_pending = None
+        self._set_status(t("tui.pwr_watts_apply", n=want))
+        try:
+            res = await asyncio.to_thread(power_core.set_watt_limit, want)
+        except Exception as e:                              # noqa: BLE001
+            vlog.log("warn", TOOL, f"watts failed: {e}")
+            st = await asyncio.to_thread(power_core.status)
+            self._watts_applied = int(round(float(
+                ((st.get("root") or {}).get("rapl_pl1_w")) or want)))
+            self._busy = False
+            self._sync(st, announce=t("tui.pwr_watts_fail", msg=str(e)[:80]),
+                       error=True)
+            self._rerun_pending()
+            return
+        st = res.get("status") or await asyncio.to_thread(power_core.status)
+        failed = res.get("failed") or []
+        self._watts_applied = int(round(float(
+            ((st.get("root") or {}).get("rapl_pl1_w")) or want)))
+        self._busy = False
+        if failed:
+            self._sync(st, announce=t("tui.pwr_watts_fail", msg=failed[0][:80]),
+                       error=True)
+        else:
+            self._sync(st, announce=t("tui.pwr_watts_ok",
+                                      n=self._watts_applied))
+        self._rerun_pending()
+
+    def _rerun_pending(self) -> None:
+        """Догоняем значение, которое пользователь выставил, пока шла запись."""
+        want = self._watts_pending
+        self._watts_pending = None
+        if want is not None and want != self._watts_applied:
+            self._apply_watts(want)
 
     # --- отрисовка ----------------------------------------------------------
 

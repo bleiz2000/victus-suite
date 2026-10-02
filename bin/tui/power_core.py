@@ -341,6 +341,26 @@ def set_typewriter(on: bool) -> dict:
     return res
 
 
+def set_watt_limit(watt: int) -> dict:
+    """Потолок мощности CPU 5..25 Вт. Работает только при включённой
+    «печатной машинке» — корень сам откажет, если режим выключен."""
+    res = {"mode": "watts", "applied": [], "failed": [], "skipped": []}
+    try:
+        watt = int(watt)
+    except (TypeError, ValueError) as exc:
+        res["failed"].append("watts: %s" % exc)
+        return res
+    data, err = _json(["sudo", "-n", POWER, "watts", str(watt), "--json"],
+                      timeout=20.0)
+    if data is None:
+        res["failed"].append(err or "victus-power watts")
+    else:
+        res["applied"] = data.get("applied") or []
+        res["failed"] = data.get("failed") or []
+        res["skipped"] = data.get("skipped") or []
+    return res
+
+
 def _fmt(hz) -> str:
     return str(int(hz)) if abs(hz - round(hz)) < 0.05 else ("%.1f" % hz)
 
@@ -370,7 +390,10 @@ def mode(root: dict | None) -> str:
         pl1 = float(root.get("rapl_pl1_w") or 99)
     except (TypeError, ValueError):
         pl1 = 99.0
-    return MODE_TYPEWRITER if (turbo_off and pl1 <= 20.0) else MODE_PARTIAL
+    # Порог 30 Вт, а не 20: ползунок потолка мощности разрешает 5..25 Вт,
+    # и «частично» на всех значениях выше 20 гасило бы его же самого.
+    # Baseline — 55 Вт, поэтому 30 по-прежнему надёжно отличает режим.
+    return MODE_TYPEWRITER if (turbo_off and pl1 <= 30.0) else MODE_PARTIAL
 
 
 def is_active() -> bool:

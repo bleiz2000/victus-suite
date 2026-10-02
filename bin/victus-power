@@ -9,6 +9,7 @@
     victus-power apply typewriter    режим «Печатная машинка» (сохраняя прошлое)
     victus-power restore             вернуть снимок, сделанный перед apply
     victus-power mux <hybrid|discrete>  явное переключение MUX (нужен reboot)
+    victus-power watts <5..25>          потолок мощности CPU (режим включён)
 
 Снимок прошлого состояния: /var/lib/victus-suite/power-state.json
 Всё, что не поддерживается прошивкой/драйвером, пропускается с пометкой —
@@ -519,6 +520,58 @@ def _nvidia_warn(out) -> bool:
                                    "[n/a]", "invalid", "failed"))
 
 
+def set_watts(watt) -> dict:
+    """Потолок мощности CPU 5..25 Вт — только при включённой «печатной
+    машинке» (проверка и здесь, а не только в UI).
+
+    PL2 ставим ×2 от PL1: иначе однопоточный брост упирается в старый
+    PL2=115 Вт и слайдер выглядит неработающим.
+    """
+    res = {"mode": "watts", "applied": [], "skipped": [], "failed": [],
+           "restorable": False}
+    try:
+        w = int(watt)
+    except (TypeError, ValueError):
+        res["failed"].append("watts: не число %r" % (watt,))
+        return res
+    if not 5 <= w <= 25:
+        res["failed"].append("watts: %d вне диапазона 5..25" % w)
+        return res
+
+    knobs = {
+        "no_turbo": read(os.path.join(PSTATE_DIR, "no_turbo")),
+        "rapl_pl1": read(os.path.join(RAPL, "constraint_0_power_limit_uw")),
+        "max_perf_pct": read(os.path.join(PSTATE_DIR, "max_perf_pct")),
+    }
+    if not looks_typewriter(knobs):
+        res["failed"].append(
+            "режим выключен: ползунок мощности действует только при "
+            "включённой печатной машинке")
+        return res
+
+    for key, path, want in (
+        ("rapl_pl1", os.path.join(RAPL, "constraint_0_power_limit_uw"),
+         "%d" % (w * 1_000_000)),
+        ("rapl_pl2", os.path.join(RAPL, "constraint_1_power_limit_uw"),
+         "%d" % (w * 2_000_000)),
+    ):
+        if read(path) is None:
+            res["skipped"].append("%s: нет %s" % (key, path))
+            continue
+        err = write(path, want, attempts=4, delay=0.2)
+        if err:
+            res["failed"].append("%s: %s" % (key, err))
+            continue
+        cur = _watts(read(path))
+        want_w = float(w if key.endswith("pl1") else w * 2)
+        if cur is not None and abs(cur - want_w) <= 1:
+            res["applied"].append("%s=%.0f Вт" % (key, cur))
+        else:
+            res["failed"].append("%s: держит %.1f Вт, ждали %.0f"
+                                 % (key, cur if cur is not None else -1, want_w))
+    return res
+
+
 def restore() -> dict:
     snap = load_snapshot()
     if not snap:
@@ -734,6 +787,8 @@ def main(argv=None) -> int:
     p_apply.add_argument("mode", choices=["typewriter"])
     p_mux = sub.add_parser("mux", parents=[common])
     p_mux.add_argument("mode", choices=["hybrid", "discrete"])
+    p_watts = sub.add_parser("watts", parents=[common])
+    p_watts.add_argument("watt", type=int, help="потолок мощности CPU 5..25 Вт")
 
     a = ap.parse_args(argv)
 
@@ -757,6 +812,8 @@ def main(argv=None) -> int:
         return emit(mux_set(a.mode), a.json)
     if a.cmd == "apply":
         return emit(apply_typewriter(), a.json)
+    if a.cmd == "watts":
+        return emit(set_watts(a.watt), a.json)
 
     ap.print_help()
     return 2
