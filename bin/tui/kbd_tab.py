@@ -279,6 +279,9 @@ class KbdTab(Vertical):
         # при speed≥1.25), поэтому волна не пропускает ступени; старые 0.3 с
         # давали на экране «ступеньки» в 4-5 шагов и хвост волны
         self._poll = self.set_interval(0.04, self._poll_status)
+        # внешние изменения: клавиша на корпусе меняет EC и last_state.json,
+        # минуя TUI — без этого тумблер врал бы до перезапуска окна
+        self._ext_poll = self.set_interval(1.5, self._poll_external)
 
     @work(exclusive=True, group="boot")
     async def _boot(self):
@@ -292,6 +295,35 @@ class KbdTab(Vertical):
         elif access in ("need-password", "error"):
             # причина выбирается по факту: модуль есть/нет, а не по слову ошибки
             self._set_status(core.access_hint(access), error=True)
+
+    def _poll_external(self) -> None:
+        """Подхват состояния, изменённого вне TUI.
+
+        Горячая клавиша на корпусе (victus-kbd power) пишет и EC, и
+        last_state.json; вкладка обязана показать ровно это, а не то,
+        что помнит с момента открытия.
+        """
+        if self._syncing:
+            return
+        st = core.load_state()
+        want_power = bool(st.get("power", True))
+        want_rgb = tuple(core._norm_rgb(st.get("rgb"), self.color))
+        if want_power == self.power and want_rgb == tuple(self.color):
+            return
+        self.power = want_power
+        self.color = want_rgb
+        # пока мы двигаем виджеты, их события не должны включать цепочку
+        # «программное изменение → заново применить в EC»
+        self._syncing = True
+        try:
+            sw = self.query_one("#power", Switch)
+            if sw.value != want_power:
+                sw.value = want_power
+        finally:
+            self._syncing = False
+        self._sync_controls()
+        self._set_status(t("tui.kbd_ext_on") if want_power
+                         else t("tui.kbd_ext_off"))
 
     async def _poll_status(self):
         st = await self._engine.status()
@@ -654,7 +686,7 @@ class KbdTab(Vertical):
         await self._apply_current()
 
     def on_switch_changed(self, event):
-        if event.switch.id != "power":
+        if event.switch.id != "power" or self._syncing:
             return
         self._power_changed(bool(event.value))
 
@@ -696,6 +728,9 @@ class KbdTab(Vertical):
         timer = getattr(self, "_poll", None)
         if timer is not None:
             timer.stop()
+        ext = getattr(self, "_ext_poll", None)
+        if ext is not None:
+            ext.stop()
         # закрыли окно → петля не должна остаться крутиться фоном;
         # при пересборке под смену языка петля продолжает работать
         if self.running and not KbdTab._rebuilding:

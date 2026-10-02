@@ -163,5 +163,7 @@
   "tui.pwr_watts_off": "The 5–25 W cap only applies while Typewriter is on.",
   "tui.pwr_watts_ok": "Cap {n} W applied",
   "tui.pwr_watts_gap": " 5 h needs {d} W less (display, SoC, radios are not capped).",
-  "tui.pwr_watts_ok5": " 5 h target met."
+  "tui.pwr_watts_ok5": " 5 h target met.",
+  "tui.kbd_ext_on": "Backlight on (hotkey)",
+  "tui.kbd_ext_off": "Backlight off (hotkey)"
 }

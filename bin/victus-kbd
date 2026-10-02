@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """HP Victus keyboard RGB via ACPI EC (/sys/kernel/debug/ec/ec0/io)."""
 
+import json
 import os
 import subprocess
 import sys
@@ -13,6 +14,11 @@ import victus_palette as pal  # noqa: E402
 from i18n import t  # noqa: E402
 
 TOOL = "victus-kbd"
+
+# Состояние TUI (rgb/power/effect): его же читает вкладка «Клавиатура».
+# Клавиша на корпусе меняет EC и ЭТОТ файл, иначе приложение показало бы
+# своё старое значение до следующего перезапуска.
+STATE_FILE = os.path.join(vlog.state_dir(), "last_state.json")
 
 EC_PATH = "/sys/kernel/debug/ec/ec0/io"
 OFFSETS = (8, 9, 10)
@@ -130,6 +136,58 @@ def cmd_stop():
         os.remove(pidfile())
     print(t("kbd.cycle_stopped", pid=pid))
     vlog.log_info(TOOL, f"stop: killed pid {pid}")
+
+
+def _load_state() -> dict:
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_state(data: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+    except OSError as exc:
+        vlog.log_warn(TOOL, f"state save failed: {exc}")
+
+
+def cmd_power(args: list) -> None:
+    """Подсветка клавиатуры: on | off | toggle.
+
+    Живёт и в EC, и в last_state.json — это и есть синхронизация с TUI:
+    горячая клавиша гасит свет, вкладка «Клавиатура» на следующем тике
+    видит power=false и сама перетягивает тумблер.
+    """
+    action = (args[0].lower() if args else "toggle")
+    if action not in ("on", "off", "toggle"):
+        die(t("kbd.usage"))
+    st = _load_state()
+    lit = any(read_rgb())
+    if action == "toggle":
+        action = "off" if lit else "on"
+    if action == "off":
+        cmd_stop()                      # петля иначе перерисует чёрное обратно
+        write_rgb(0, 0, 0)
+        st["power"] = False
+        st["running"] = False
+    else:
+        rgb = st.get("rgb") or [255, 255, 255]
+        try:
+            r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+        except (TypeError, ValueError, IndexError):
+            r, g, b = 255, 255, 255
+        write_rgb(r, g, b)
+        st["power"] = True
+    _save_state(st)
+    print("power=%s rgb=%s" % (
+        "on" if st.get("power") else "off", ",".join(map(str, read_rgb()))))
+    vlog.log_info(TOOL, f"power {action} -> {st.get('power')}")
 
 
 def cmd_cycle(args):
@@ -252,6 +310,11 @@ def main():
 
     if cmd == "stop":
         cmd_stop()
+        return
+
+    if cmd == "power":
+        ensure_ec()
+        cmd_power(args[1:])
         return
 
     if cmd == "dump":
