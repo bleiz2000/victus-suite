@@ -33,6 +33,10 @@ import victus_log as vlog
 from i18n import t
 
 TOOL = "power"
+
+# Доступно ~47 Вт·ч: столько / 5 ч = 9.4 Вт средней системы.
+# Это ЦЕЛЬ, которую подсказка сравнивает с реальным расходом батареи.
+TARGET_HOURS_W = 9.4
 POLL_S = 5.0
 
 MODE_LABELS = {
@@ -320,15 +324,34 @@ class PowerTab(Vertical):
             want = 15
         cap.update(Text(t("tui.pwr_watts_lbl")))
         if on:
-            # честно показываем и потолок, и РЕАЛЬНЫЙ расход системы:
-            # без второго числа «5 часов» остаётся обещанием
+            # Два разных числа, которые раньше сваливались в одно:
+            #   сколько ограничен CPU  и  сколько реально тянет ноут.
+            # Ползунок не двигает дисплей и SoC, поэтому «потолок 6 Вт»
+            # рядом с «расход 22 Вт» без пояснения читается как враньё.
+            # Состояние дискретки в подсказке НЕ захардкожено: ридаут
+            # иначе врал бы друг против друга, когда карта просыпается.
             bat = st.get("battery") or {}
+            root = st.get("root") or {}
             watts = bat.get("watts")
             hours = bat.get("hours")
-            hint.update(Text(t("tui.pwr_watts_now",
-                               n=want,
-                               w=("%.1f" % watts) if watts else "—",
-                               h=_fmt_dur(hours) if hours else "—")))
+            try:
+                freq = int(float(root.get("max_freq_mhz") or 0))
+            except (TypeError, ValueError):
+                freq = 0
+            w_s = ("%.1f" % watts) if watts else "—"
+            line = t("tui.pwr_watts_now",
+                     n=want,
+                     f=freq or "—",
+                     w=w_s,
+                     h=_fmt_dur(hours) if hours else "—")
+            try:
+                gap = float(watts) - TARGET_HOURS_W
+            except (TypeError, ValueError):
+                gap = None
+            if gap is not None:
+                line += (t("tui.pwr_watts_gap", d=("%.1f" % gap)) if gap > 0.1
+                         else t("tui.pwr_watts_ok5"))
+            hint.update(Text(line))
         else:
             hint.update(Text(t("tui.pwr_watts_off")))
         if abs(float(sl.value) - want) > 0.5:
