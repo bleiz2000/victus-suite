@@ -77,6 +77,7 @@ Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 | `victus-kbd get` / `dump [start] [len]` | current RGB / EC dump | yes |
 | `victus-kbd power on\|off\|toggle` | backlight on/off — writes EC **and** `state/last_state.json` (the tab follows it) | yes |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | vertil fans (hwmon PWM) | via the rule above |
+| `victus-power status\|snapshot\|apply\|restore\|watts N\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **live CPU draw (RAPL)** | via the NOPASSWD rule |
 | `ColorMaker list\|add\|rm\|palette` | named colors (english only) | no |
 | `Changer <name\|R G B\|#RRGGBB\|random\|off>` | apply color | asks sudo |
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
@@ -307,7 +308,7 @@ on average. The tab toggles a system-wide, fully reversible cap.
 |---|---|
 | **Typewriter switch** | PL1 = N W, PL2 = 2·N, `max_perf_pct = 20 + (N-5)·2`, per-CPU frequency ceiling `1.0 + 0.08·(N-5)` GHz (clamped by `cpuinfo_max_freq`), dGPU → `power/control=auto` (parks in D3cold). Every value it overwrites is captured first. |
 | **Watt slider 5..25** | the same cap, retuned live (click, arrows, PgUp/PgDn, Home/End, wheel); the slider goes dead while the mode is off. |
-| **Readout** | battery W, charge %, ETA to empty, and the real system draw — so the honest answer is visible when 5 h is out of reach (a browser + editor sits at 12-16 W). |
+| **Readout** | CPU watts from RAPL (reacts to the slider immediately) and a running average from `energy_now` — the EC's `power_now` lags by seconds and steps, so it is not shown as a live figure; plus charge %, ETA to empty — so the honest answer is visible when 5 h is out of reach (a browser + editor sits at 12-16 W). |
 | **Switch off** | full revert: PL1/PL2, perf cap, freq ceiling, dGPU control and the previous fan mode all come back (`.bak` in `state/power_prev.json`). |
 
 `sudo victus-power watts N` applies the same plan from the CLI (refuses with
