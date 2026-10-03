@@ -88,16 +88,32 @@ def _fmt_hz(hz) -> str:
 
 
 class WattsBar(Static):
-    """Ползунок потолка мощности CPU 5..25 Вт.
+    """Ползунок-«магнит»: только измеренные ступени 8/10/15/20/25 Вт.
 
-    В Textual 8.2.8 встроенного Slider нет (в `textual.widgets` он
-    отсутствует), поэтому рисуем свой: клик по дорожке, ←/→ и ↑/↓ на 1 Вт,
-    PgUp/PgDn на 5 Вт, Home/End — к краям. Программная запись `.value =`
-    события не шлёт — Changed появляется только от рук пользователя.
+    Непрерывный 5..25 обещал дробные цели («13 Вт»), которых железо не
+    удерживает: PL1 и потолок частоты считаются целыми ваттами, а ярусы
+    яркости/BT/USB — ступенчатые. Любое значение здесь дёргается в
+    ближайшую проверенную точку, поэтому «плавающих» целей не существует.
+
+    Клик и ↑/↓/←/→ — соседняя ступень, PgUp/PgDn — через ступень,
+    Home/End — крайние (8/25), колесо — соседняя ступень.
+    Программная запись `.value =` события не шлёт — Changed появляется
+    только от рук пользователя.
     """
-    MIN, MAX = 5, 25
+    SNAPS = (8, 10, 15, 20, 25)
+    MIN, MAX = SNAPS[0], SNAPS[-1]
     can_focus = True
     value = reactive(15)
+
+    @classmethod
+    def snap(cls, want) -> int:
+        """Ближайшая фиксированная точка (при равном расстоянии — верхняя)."""
+        try:
+            want = int(want)
+        except (TypeError, ValueError):
+            return cls.SNAPS[len(cls.SNAPS) // 2]
+        want = max(cls.MIN, min(cls.MAX, want))
+        return min(cls.SNAPS, key=lambda s: (abs(s - want), -s))
 
     class Changed(Message):
         def __init__(self, bar: "WattsBar", value: int) -> None:
@@ -113,24 +129,40 @@ class WattsBar(Static):
                                           self.value, t("tui.unit_w")))
 
     def _set(self, want, notify: bool = True) -> None:
-        want = max(self.MIN, min(self.MAX, int(want)))
+        want = self.snap(want)
         if want == self.value:
             return
         self.value = want
         if notify:
             self.post_message(self.Changed(self, want))
 
+    def _idx(self) -> int:
+        """Индекс текущей точки в SNAPS (значение всегда snap, но на всякий)."""
+        try:
+            return self.SNAPS.index(int(self.value))
+        except ValueError:
+            return min(range(len(self.SNAPS)),
+                       key=lambda i: abs(self.SNAPS[i] - self.value))
+
     def on_click(self, event: events.Click) -> None:
         self.focus()
         span = max(1, (self.size.width or 40) - 7)
         frac = max(0.0, min(1.0, event.offset.x / float(span)))
-        self._set(self.MIN + round(frac * (self.MAX - self.MIN)))
+        self._set(self.MIN + frac * (self.MAX - self.MIN))
 
     def on_key(self, event: events.Key) -> None:
-        deltas = {"left": -1, "down": -1, "right": 1, "up": 1,
-                  "pagedown": -5, "pageup": 5}
-        if event.key in deltas:
-            self._set(self.value + deltas[event.key])
+        i = self._idx()
+        if event.key in ("left", "down"):
+            self._set(self.SNAPS[max(0, i - 1)])
+            event.stop()
+        elif event.key in ("right", "up"):
+            self._set(self.SNAPS[min(len(self.SNAPS) - 1, i + 1)])
+            event.stop()
+        elif event.key == "pagedown":
+            self._set(self.SNAPS[max(0, i - 2)])
+            event.stop()
+        elif event.key == "pageup":
+            self._set(self.SNAPS[min(len(self.SNAPS) - 1, i + 2)])
             event.stop()
         elif event.key == "home":
             self._set(self.MIN); event.stop()
@@ -138,10 +170,10 @@ class WattsBar(Static):
             self._set(self.MAX); event.stop()
 
     def on_scroll_up(self, event: events.ScrollUp) -> None:
-        self._set(self.value + 1)
+        self._set(self.SNAPS[min(len(self.SNAPS) - 1, self._idx() + 1)])
 
     def on_scroll_down(self, event: events.ScrollDown) -> None:
-        self._set(self.value - 1)
+        self._set(self.SNAPS[max(0, self._idx() - 1)])
 
 
 class PowerTab(Vertical):
@@ -156,12 +188,19 @@ class PowerTab(Vertical):
         self._busy = False
         self._mode_busy = False
         self._poll = None
-        # ОДИН ползунок: цель по всему ноутбуку (5..25 Вт)
+        # ОДИН ползунок: цель по всему ноутбуку (ступени 8/10/15/20/25 Вт)
         self._sys_target = state.get("power_target")
         self._sys_applied = None
         self._sys_syncing = False
         self._sys_pending = None
         self._cascade_steps = []
+        # ручное движение ползунка «действует» ещё пару секунд: без этого
+        # периодический опрос подтягивал бы значение из железа и дёргал
+        # выбор обратно к прошлой цели между нажатиями
+        self._hold_until = 0.0
+        # идёт фаза стабилизации: {stage, n, target} — пока оно есть,
+        # нижняя строка показывает таймер, а не прыгающие ваттыы
+        self._stab: dict | None = None
 
     # --- композиция ---------------------------------------------------------
 
@@ -329,7 +368,7 @@ class PowerTab(Vertical):
     # --- один ползунок: потолок ВСЕЙ системы -------------------------------
 
     def _sync_watts(self, st: dict, mode: str) -> None:
-        """Единственный ползунок 5..25 Вт — цель по всему ноутбуку.
+        """Единственный ползунок 8/10/15/20/25 Вт — цель по всему ноутбуку.
 
         Отдельного «ползунка CPU» больше нет: он показывал потолок пакета
         (PL1), а ноут при этом тянул на 5–7 Вт больше — пользователь видел
@@ -344,11 +383,20 @@ class PowerTab(Vertical):
             return
         on = mode in _LIVE_MODES and not self._mode_busy
         want = self._target(st)
-        cap.update(Text(t("tui.pwr_sys_lbl")))
+        cap.update(Text(t("tui.pwr_sys_steps",
+                          s=" · ".join(str(x) for x in WattsBar.SNAPS))))
         if on:
             hint.update(Text(self._hint_text(st)))
         else:
             hint.update(Text(t("tui.pwr_watts_off")))
+        if self._busy or self._sys_pending is not None \
+                or time.time() < self._hold_until:
+            # Каскад ещё пишет/меряет (или пользователь только что дёрнул
+            # ползунок): подтягивать значение из железа нельзя — свежий
+            # выбор (8 Вт) перетягивался бы обратно на прошлое состояние
+            # (10 Вт), пока замер ещё идёт.
+            sl.disabled = not on
+            return
         if abs(float(sl.value) - want) > 0.5:
             # значение подтянуто из железа, а не перетянуто рукой
             self._sys_syncing = True
@@ -360,17 +408,21 @@ class PowerTab(Vertical):
         sl.disabled = not on
 
     def _target(self, st: dict) -> int:
-        """Цель из железа (корневой статус), иначе сохранённая, иначе 15."""
+        """Цель из железа, иначе сохранённая, иначе 15 — всегда в SNAPS.
+
+        Железо может помнить старую дробную цель (12 Вт из прошлых сессий):
+        показывать её на шкале нельзя — ползунок обязан стоять на
+        фиксированной точке, иначе «магнит» выглядит сломанным.
+        """
+        raw = None
         for src in ((st or {}).get("root") or {}, st or {}):
             val = src.get("target") or src.get("cascade_target")
-            try:
-                return max(5, min(25, int(val)))
-            except (TypeError, ValueError):
-                continue
-        try:
-            return max(5, min(25, int(self._sys_target or 15)))
-        except (TypeError, ValueError):
-            return 15
+            if val is not None:
+                raw = val
+                break
+        if raw is None:
+            raw = self._sys_target or 15
+        return WattsBar.snap(raw)
 
     def _hw_steps(self, st: dict) -> list[str]:
         """Что реально включено, прочитанное из ЖЕЛЕЗА, а не из плана.
@@ -442,6 +494,7 @@ class PowerTab(Vertical):
         if (self._st or {}).get("mode") not in _LIVE_MODES:
             return                      # режим выключен — ползунок мёртв
         want = int(event.value)
+        self._hold_until = time.time() + 3.0
         if want == (self._sys_applied if self._sys_applied is not None else -1):
             return                      # это мы сами подтянули из железа
         if self._busy:
@@ -454,62 +507,201 @@ class PowerTab(Vertical):
 
     @work(exclusive=True, group="power-cascade")
     async def _apply_cascade(self, target: int):
-        """Один ползунок: цель по всей системе → каскад + замер факта."""
+        """Цель по всей системе: мгновенная запись, потом стабилизация с таймером.
+
+        Две стадии — чтобы интерфейс не висел в «почти всё готово»:
+          1. `cascade --no-stabilize` (~1–3 с): железо меняется сразу, и
+             подсказка показывает ПЛАН (что выключено, какая герцовка, ETA);
+          2. `phase` (4 с покоя + окно 30 с): статус и нижняя строка тикают
+             секунда в секунду, финальные цифры фиксируются только в конце.
+        Между фазами по необходимости ужимается бюджет CPU.
+        """
         self._busy = True
         self._sys_pending = None
-        self._set_status(t("tui.pwr_sys_apply", t=target))
+        self._sys_applied = target          # жёстко: статус не отмотает назад
+        meas: dict | None = None
         try:
-            # без --cpu: бюджет CPU считает сам план от цели минус плата
-            res = await asyncio.to_thread(power_core.cascade_set, target, None)
+            self._set_status(t("tui.pwr_sys_apply", t=target))
+            res = await asyncio.to_thread(power_core.cascade_set,
+                                          target, None, False)
+            self._cascade_steps = res.get("steps") or []
+            self._sys_target = target
+            try:
+                state = core.load_state()
+                state["power_target"] = target
+                core.save_state(state)
+            except OSError:
+                pass
+            failed = res.get("failed") or []
+            st = await asyncio.to_thread(power_core.status)
+            if failed:
+                self._sync(st, announce=t("tui.pwr_watts_fail",
+                                          msg=failed[0][:80]), error=True)
+                return
+
+            # герцовка: панель на 144 Гц жрёт ватты, которых у низких целей нет
+            mon = st.get("monitor") or {}
+            try:
+                hz = float(mon.get("hz") or 0)
+            except (TypeError, ValueError):
+                hz = 0
+            if target <= 18 and hz > 60.5 and mon.get("name"):
+                if await asyncio.to_thread(power_core.set_refresh, mon, 60.0):
+                    st = await asyncio.to_thread(power_core.status)
+            self._sync(st)                      # железо и подсказка — сразу
+            self._show_plan_hint(target, res.get("plan") or {})
+
+            for _attempt in range(3):
+                ph = await self._phase(target)
+                if ph.get("failed"):
+                    break
+                meas = ph.get("measure") or {}
+                nxt = meas.get("next_cpu")
+                if nxt is None:
+                    break                       # цель взята или уже дно
+                self._set_status(t("tui.pwr_stab_trim", c=int(nxt)), warn=True)
+                cres = await asyncio.to_thread(power_core.cascade_set,
+                                               target, int(nxt), False)
+                if cres.get("failed"):
+                    break
+
+            self._stab = None                 # фаза кончилась — цифры снова живые
+            st = await asyncio.to_thread(power_core.status)
+            if meas is None or meas.get("w") is None:
+                # замер невозможен (зарядка) — говорим об этом, а не «применено»
+                self._sync(st, announce=t("tui.pwr_sys_ok", t=target),
+                           warn=bool(meas and meas.get("reason")))
+            elif meas.get("feasible"):
+                self._sync(st, announce=t("tui.pwr_sys_done", t=target,
+                                          f=_f1(meas["w"]),
+                                          c=_f1(meas.get("rapl_w") or 0),
+                                          p=_f1(meas.get("platform_w") or 0)))
+            else:
+                self._sync(st, announce=t("tui.pwr_sys_short", t=target,
+                                          f=_f1(meas["w"]),
+                                          m=_f1(meas.get("min_w") or 0)),
+                           warn=True)
         except Exception as e:                              # noqa: BLE001
             vlog.log("warn", TOOL, f"cascade failed: {e}")
-            st = await asyncio.to_thread(power_core.status)
-            self._busy = False
-            self._sys_applied = self._target(st)
-            self._sync(st, announce=t("tui.pwr_watts_fail", msg=str(e)[:80]),
-                       error=True)
-            self._rerun_pending()
-            return
-
-        self._cascade_steps = res.get("steps") or []
-        self._sys_target = target
-        try:
-            state = core.load_state()
-            state["power_target"] = target
-            core.save_state(state)
-        except OSError:
-            pass
-        st = res.get("status") or await asyncio.to_thread(power_core.status)
-        # герцовка: панель на 144 Гц жрёт ватты, которых у низких целей нет
-        mon = st.get("monitor") or {}
-        try:
-            hz = float(mon.get("hz") or 0)
-        except (TypeError, ValueError):
-            hz = 0
-        if target <= 18 and hz > 60.5 and mon.get("name"):
-            if await asyncio.to_thread(power_core.set_refresh, mon, 60.0):
+            try:
                 st = await asyncio.to_thread(power_core.status)
-        self._sys_applied = self._target(st)
-        self._busy = False
-        failed = res.get("failed") or []
-        meas = res.get("measure") or {}
-        if failed:
-            self._sync(st, announce=t("tui.pwr_watts_fail", msg=failed[0][:80]),
-                       error=True)
-        elif meas.get("w") is None:
-            # замер невозможен (зарядка) — говорим об этом, а не «применено»
-            self._sync(st, announce=t("tui.pwr_sys_ok", t=target),
-                       warn=bool(meas.get("reason")))
-        elif meas.get("feasible"):
-            self._sync(st, announce=t("tui.pwr_sys_done", t=target,
-                                      f=_f1(meas["w"]),
-                                      c=_f1(meas.get("rapl_w") or 0),
-                                      p=_f1(meas.get("platform_w") or 0)))
-        else:
-            self._sync(st, announce=t("tui.pwr_sys_short", t=target,
-                                      f=_f1(meas["w"]),
-                                      m=_f1(meas.get("min_w") or 0)), warn=True)
-        self._rerun_pending()
+                self._sync(st, announce=t("tui.pwr_watts_fail",
+                                          msg=str(e)[:80]), error=True)
+            except Exception as e2:                         # noqa: BLE001
+                vlog.log("warn", TOOL, f"status failed: {e2}")
+        finally:
+            self._stab = None
+            self._busy = False
+            self._hold_until = 0.0
+            self._rerun_pending()
+
+    async def _phase(self, target: int) -> dict:
+        """Одна фаза стабилизации с видимым таймером (4 с покоя + 30 с окно).
+
+        Пока хелпер меряет, статус и нижняя строка тикают по трём стадиям,
+        чтобы цифры совпадали с реальностью: покой (4 с, система успокаивается
+        после записи) → замер (окно 30 с) → перерыв (окно уже прошло, но
+        железо ещё присаживается). Прыгающие ватты в этот момент не показываем:
+        это адаптация железа, а не поломка программы.
+        """
+        settle, dur = 4, 30
+        elapsed = 0
+        stop = asyncio.Event()
+
+        def tick_text() -> tuple[str, object]:
+            if elapsed < settle:
+                return "calm", settle - elapsed
+            if elapsed < settle + dur:
+                return "run", settle + dur - elapsed
+            return "over", elapsed - settle - dur
+
+        async def ticker():
+            nonlocal elapsed
+            while not stop.is_set():
+                stage, n = tick_text()
+                self._stab = {"stage": stage, "n": n, "target": target}
+                if stage == "calm":
+                    self._set_status(t("tui.pwr_stab_calm", s=n), warn=True)
+                elif stage == "run":
+                    self._set_status(t("tui.pwr_stab", s=n, d=dur), warn=True)
+                else:
+                    self._set_status(t("tui.pwr_stab_more", e=n), warn=True)
+                self._set_live_stab(stage, n)
+                try:
+                    await asyncio.sleep(1.0)
+                except asyncio.CancelledError:
+                    return
+                elapsed += 1
+
+        task = asyncio.create_task(ticker())
+        try:
+            return await asyncio.to_thread(power_core.phase, target, dur)
+        finally:
+            stop.set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    def _show_plan_hint(self, target: int, plan: dict) -> None:
+        """Подсказка ПЛАНА сразу после записи, ещё до замера.
+
+        Пользователь через секунду видит, что именно применено (герцовка,
+        что выключено, сколько продержит) и не ждёт 34-секундного окна
+        замера в тишине.
+        """
+        try:
+            hint = self.query_one("#pwr-watts-hint", Static)
+        except Exception:                                     # noqa: BLE001
+            return
+        steps = self._plan_steps(plan)
+        if not steps:
+            return
+        out = [t("tui.pwr_sys_hint", t=target, steps=" · ".join(steps))]
+        bat = (self._st or {}).get("battery") or {}
+        if bat.get("hours") and not (self._st or {}).get("on_ac"):
+            out.append(t("tui.pwr_sys_eta", h1=_f1(bat["hours"] * 0.85),
+                         h2=_f1(bat["hours"] * 1.05)))
+        out.append(t("tui.pwr_sys_stabilizing"))
+        hint.update(Text(" ".join(out)))
+
+    @staticmethod
+    def _plan_steps(plan: dict) -> list[str]:
+        """Шаги из ПЛАНА (до замера): то, что каскад записал только что."""
+        steps: list[str] = []
+        cpu = plan.get("cpu")
+        if cpu:
+            steps.append(t("tui.cs_cpu",
+                           f=_f1(float(plan.get("freq") or 0) / 1e6), p=cpu))
+        if plan.get("bright") is not None:
+            steps.append(t("tui.cs_screen", hz=60, b=plan.get("bright")))
+        if plan.get("bt"):
+            steps.append(t("tui.cs_bt"))
+        if plan.get("wifi"):
+            steps.append(t("tui.cs_wifi"))
+        if plan.get("usb"):
+            steps.append(t("tui.cs_usb"))
+        if plan.get("kbd") is False:
+            steps.append(t("tui.cs_kbd"))
+        if plan.get("slow"):
+            steps.append(t("tui.cs_slow"))
+        steps.append(t("tui.cs_dgpu"))
+        return steps
+
+    def _set_live_stab(self, stage: str, n: int) -> None:
+        """Нижняя строка во время стабилизации: таймер вместо прыгающих Вт.
+
+        stage: calm — покой перед замером, run — идёт окно замера,
+        over — окно прошло, железо ещё присаживается.
+        """
+        try:
+            widget = self.query_one("#p-live-text", Static)
+        except Exception:                                     # noqa: BLE001
+            return
+        key = {"calm": "tui.pwr_live_stab_calm", "run": "tui.pwr_live_stab",
+               "over": "tui.pwr_live_stab_more"}.get(stage, "tui.pwr_live_stab")
+        widget.update(Text(t(key, s=n, e=n), style="#ffd766"))
 
     def _rerun_pending(self) -> None:
         """Догоняем значение, которое выставили, пока шла запись."""
@@ -523,13 +715,19 @@ class PowerTab(Vertical):
     def _render_live(self, st: dict) -> None:
         """Нижняя строка: цель vs ФАКТ (суммарные ватты от батареи).
 
-        Это главный ответ на «ползунок говорит 7, а ноут жрёт 12»: цифра
-        берётся из fuel-gauge (сглаженный power_now), рядом — сколько из
-        неё уходит в CPU (RAPL) и сколько остаётся на плату/экран/радио.
+        Это главный ответ на «ползунок говорит 7, а ноут жрёт 12»: цифра —
+        среднее по падению энергии (окно ≥12 с, без ступеней промежённого
+        power_now), рядом — сколько уходит в CPU (RAPL) и сколько остаётся
+        на плату/экран/радио. Во время стабилизации здесь таймер.
         """
         try:
             widget = self.query_one("#p-live-text", Static)
         except Exception:                                     # noqa: BLE001
+            return
+        if self._stab:
+            # идёт замер: цифры ещё прыгают, показываем таймер, а не Вт
+            self._set_live_stab(self._stab.get("stage") or "run",
+                                int(self._stab.get("n") or 0))
             return
         if not st:
             widget.update(Text(t("tui.pwr_wait"), style="#7a7a7a"))

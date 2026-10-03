@@ -10,12 +10,14 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from tui import core
 
@@ -289,7 +291,9 @@ def cpu_w() -> float | None:
     Единственная цифра, которая реагирует на ползунок потолка сразу:
     батарейный `power_now` отстаёт на секунды и двигается ступенями.
     """
-    data, _err = _json(["sudo", "-n", POWER, "draw", "--dur", "1.2", "--json"],
+    # 0.8 с: RAPL считает в µJ, за 0.8 с на 5 Вт накапливается ~4·10⁶ µJ —
+    # точности хватает, а сводка статуса экономит 0.4 с на каждом тике
+    data, _err = _json(["sudo", "-n", POWER, "draw", "--dur", "0.8", "--json"],
                        timeout=12.0)
     if data is None:
         return None
@@ -458,7 +462,7 @@ def set_watt_limit(watt: int) -> dict:
 
 def cascade_set(target: int, cpu: int | None = None,
                 stabilize: bool = True, dur: float = 30.0) -> dict:
-    """Каскад на цель по ВСЕМУ ноутбуку (5..25 Вт).
+    """Каскад на цель по ВСЕМУ ноутбуку (TUI: 8/10/15/20/25; CLI: 5..25).
 
     Стабилизация (по умолчанию вкл): хелпер после применения меряет факт
     от батареи и стягивает бюджет CPU к цели.
@@ -478,6 +482,21 @@ def cascade_set(target: int, cpu: int | None = None,
         return {"mode": "cascade", "applied": [], "failed": [err or "cascade"],
                 "steps": []}
     return data
+
+
+def phase(target: int, dur: float = 30.0) -> dict:
+    """Одна фаза стабилизации: покой 4 с → замер → вердикт (без записи).
+
+    Разделение нужно только ради честного таймера в интерфейсе: пока хелпер
+    меряет, TUI показывает «Стабилизация: ~N с», а не молча висит. В ответе —
+    measure (факт/плата/min_w/feasible) и next_cpu: на сколько ужать CPU,
+    если цель не взята.
+    """
+    data, err = _json(["sudo", "-n", POWER, "phase",
+                       "--target", str(int(target)), "--dur", str(float(dur)),
+                       "--json"], timeout=180.0)
+    return data if isinstance(data, dict) else {"mode": "phase",
+                                                "failed": [err or "phase"]}
 
 
 def measure(dur: float = 40.0) -> dict:
@@ -544,12 +563,25 @@ def is_active() -> bool:
 
 
 def status() -> dict:
-    """Сводка для вкладки «Питание». Части, которых нет, просто отсутствуют."""
-    st = {"battery": battery(), "cpu_w": cpu_w()}
-    st["ppd"] = ppd_get()
-    st["monitor"] = monitor_info()
-    st["fans"] = fan_status()
-    root = root_status()
+    """Сводка для вкладки «Питание». Части, которых нет, просто отсутствуют.
+
+    Опросы независимы, поэтому идут параллельно: последовательно сводка
+    собиралась 1.9 с (почти всё — окно RAPL), и вкладка отвечала с задержкой
+    на каждый тик. Теперь — сумма максимального, ~1.4 с, и интерфейс
+    остаётся отзывчивым (всё равно в фоновом потоке).
+    """
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        f_bat = pool.submit(battery)
+        f_cpu = pool.submit(cpu_w)
+        f_ppd = pool.submit(ppd_get)
+        f_mon = pool.submit(monitor_info)
+        f_fan = pool.submit(fan_status)
+        f_root = pool.submit(root_status)
+        st = {"battery": f_bat.result(), "cpu_w": f_cpu.result()}
+        st["ppd"] = f_ppd.result()
+        st["monitor"] = f_mon.result()
+        st["fans"] = f_fan.result()
+        root = f_root.result()
     st["root"] = root
     st["root_ok"] = root is not None
     st["mode"] = mode(root)
@@ -561,14 +593,23 @@ def status() -> dict:
     bat = st["battery"] or {}
     status = (bat.get("status") or "").lower()
     st["on_ac"] = "discharg" not in status
-    total = bat.get("w_inst") or bat.get("watts")
+    # Живая цифра — среднее по падению energy_now (окно ≥12 с): оно не
+    # прыгает на ступенях промежённого power_now, поэтому нижняя строка
+    # не «скачет до 14–15 Вт» на восьми измеренных. EMA остаётся только
+    # запасным вариантом, пока первое окно ещё не накопилось.
+    raw = bat.get("w_inst") or bat.get("watts")
     if st["on_ac"]:
-        total = None                    # на зарядке это ток зарядки, не расход
-    st["total_w"] = total
-    st["total_avg_w"] = None if st["on_ac"] else (bat.get("avg_w") or total)
+        raw = None                       # на зарядке это ток зарядки, не расход
+    avg = None if st["on_ac"] else (bat.get("avg_w") or raw)
+    st["total_w"] = avg
+    st["total_inst_w"] = raw
+    st["total_avg_w"] = avg
     cpu = st.get("cpu_w")
-    st["platform_w"] = (round(total - cpu, 1)
-                        if total is not None and cpu is not None else None)
+    # плату считаем от МГНОВЕННОЙ цифры: cpu — это текущий RAPL, вычитать
+    # из него среднее за 12 с нельзя (получится искажённая «плата»)
+    base = raw if raw is not None else avg
+    st["platform_w"] = (round(base - cpu, 1)
+                        if base is not None and cpu is not None else None)
     # план каскада из корневого статуса (цель, ожидание, минимум, замер)
     plan = (root or {}).get("cascade_plan") or {}
     st["target"] = (root or {}).get("cascade_target")

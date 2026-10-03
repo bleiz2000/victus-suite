@@ -1179,6 +1179,111 @@ def cascade_apply(target, cpu=None, stabilize: bool = True,
     return res
 
 
+def _verdict(plan: dict, meas: dict, rapl):
+    """Один источник правды для «взята / не взята» и ужатия CPU.
+
+    Считает по живому замеру: плата = факт − RAPL, минимум плана =
+    плата + CPU_MIN_W, следующий бюджет CPU = цель − плата (но не ниже
+    дна и не выше текущего). Ничего не пишет — решает вызывающая сторона:
+    CLI-каскад ужимает сам, TUI показывает таймер и ужимает между фазами.
+
+    Возвращает (platform, next_cpu), где next_cpu=None — ужимать нечего.
+    """
+    target = plan.get("target")
+    w = meas.get("w")
+    platform = None
+    if w is not None and rapl is not None:
+        platform = max(0.0, w - rapl)
+        plan["overhead"] = round(platform, 2)
+        plan["min_w"] = round(platform + CPU_MIN_W, 1)
+        try:
+            plan["feasible"] = bool(int(target) >= plan["min_w"] - 1.0)
+        except (TypeError, ValueError):
+            pass
+    next_cpu = None
+    try:
+        cpu = int(plan.get("cpu") or CPU_MIN_W)
+    except (TypeError, ValueError):
+        cpu = CPU_MIN_W
+    if w is not None and target is not None and w > float(target) + 0.7 \
+            and cpu > CPU_MIN_W:
+        try:
+            want = max(CPU_MIN_W,
+                       int(float(target) - (platform or plan.get("overhead") or 0)))
+        except (TypeError, ValueError):
+            want = CPU_MIN_W
+        cand = max(CPU_MIN_W, min(cpu - 1, want))
+        if cand < cpu:
+            next_cpu = cand
+    return platform, next_cpu
+
+
+def phase_stabilize(target: int, dur: float = 30.0) -> dict:
+    """Одна фаза стабилизации для TUI: покой → замер → вердикт, БЕЗ записи.
+
+    Отдельная команда нужна только ради таймера: TUI между фазами рисует
+    «Стабилизация питания: ~N с», а здесь считаются честный факт, живая
+    плата и следующий бюджет CPU. Записью (PL1/частоты) занимается сам TUI
+    через `cascade N --cpu M --no-stabilize` — поэтому фаза возвращает
+    next_cpu, а не применяет его.
+    """
+    res = {"mode": "phase", "applied": [], "skipped": [], "failed": [],
+           "steps": []}
+    try:
+        t = int(target)
+    except (TypeError, ValueError):
+        res["failed"].append("phase: цель не число")
+        return res
+    prev = _cascade_read() or {}
+    plan = prev.get("plan") if isinstance(prev.get("plan"), dict) else None
+    if not plan or plan.get("target") != t:
+        try:
+            plan = cascade_plan(t)
+        except ValueError as exc:
+            res["failed"].append("phase: %s" % exc)
+            return res
+    res["plan"] = plan
+
+    time.sleep(4.0)                      # покой: запись только что закончилась
+    meas = measure_total(dur)
+    if not meas.get("ok"):
+        meas.update(target=t, cpu=plan.get("cpu"),
+                    expect_w=plan.get("expect_w"), min_w=plan.get("min_w"),
+                    feasible=plan.get("feasible"), next_cpu=None, trimmed=0)
+        res["measure"] = meas
+        return res
+
+    rapl = draw(1.0).get("cpu_w")
+    platform, next_cpu = _verdict(plan, meas, rapl)
+    meas["rapl_w"] = rapl
+    if platform is not None and rapl is not None:
+        meas["platform_w"] = round(meas["w"] - rapl, 2)
+    tol = 0.7
+    meas.update(target=t, cpu=plan.get("cpu"), expect_w=plan.get("expect_w"),
+                min_w=plan.get("min_w"),
+                feasible=bool(plan.get("feasible") and
+                              meas["w"] <= float(t) + tol),
+                next_cpu=next_cpu, trimmed=0,
+                slow=bool(plan.get("slow")))
+    if next_cpu is None:
+        if meas["w"] <= float(t) + tol:
+            res["applied"].append("факт %.1f Вт — цель %d Вт взята"
+                                  % (meas["w"], t))
+        else:
+            res["skipped"].append(
+                "факт %.1f Вт при цели %d Вт (минимум %.1f Вт, CPU %s Вт)"
+                % (meas["w"], t, plan.get("min_w") or 0.0,
+                   plan.get("cpu", "-")))
+    else:
+        res["applied"].append("нужно ужать CPU до %d Вт" % next_cpu)
+    res["measure"] = meas
+    # план и вердикт — в status/TUI; без снимков яркости/BT не пишем
+    if prev.get("brightness") is not None or prev.get("plan") is not None:
+        prev.update(plan=plan, cpu=plan.get("cpu"), target=t, measure=meas)
+        _cascade_write(prev)
+    return res
+
+
 def _stabilize(res: dict, prev: dict, plan: dict, dur: float) -> dict:
     """Замер факта от батареи и подтяжка CPU к цели.
 
@@ -1209,27 +1314,12 @@ def _stabilize(res: dict, prev: dict, plan: dict, dur: float) -> dict:
 
     trimmed = 0
     for _pass in range(3):
-        target = plan["target"]
-        w = meas.get("w")
         rapl = draw(1.0).get("cpu_w")
-
-        # живая плата = факт − CPU: единственный честный ориентир
-        platform = None
-        if w is not None and rapl is not None:
-            platform = max(0.0, w - rapl)
-            plan["overhead"] = round(platform, 2)
-            plan["min_w"] = round(platform + CPU_MIN_W, 1)
-            plan["feasible"] = bool(target >= plan["min_w"] - 1.0)
-
-        if w is None or w <= target + 1.0:
-            break                         # цель взята — ужимать нечего
-        if plan["cpu"] <= CPU_MIN_W:
-            break                         # минимум уже, плата не даёт
-
-        want = max(CPU_MIN_W, int(target - (platform or plan["overhead"])))
-        new_cpu = max(CPU_MIN_W, min(plan["cpu"] - 1, want))
-        if new_cpu >= plan["cpu"]:
-            break                         # шага вниз не осталось
+        # живая плата и следующий бюджет считает общий _verdict — та же
+        # функция, что отвечает за вердикт в фазах TUI (одна правда)
+        _platform, new_cpu = _verdict(plan, meas, rapl)
+        if new_cpu is None:
+            break                         # цель взята или ужимать нечего
         plan["cpu"] = new_cpu
         plan["freq"] = _cap_freq_w(new_cpu)
         plan["expect_w"] = round(new_cpu + plan["overhead"], 1)
@@ -1552,6 +1642,11 @@ def main(argv=None) -> int:
                        help="окно замера факта, с (3..60)")
     p_cas.add_argument("--no-stabilize", action="store_true",
                        help="не замерять и не подтягивать план к цели")
+    p_ph = sub.add_parser("phase", parents=[common])
+    p_ph.add_argument("--target", type=int, required=True,
+                      help="текущая цель по всей системе, Вт")
+    p_ph.add_argument("--dur", type=float, default=30.0,
+                      help="окно замера, с (3..60)")
     sub.add_parser("cascade-off", parents=[common])
     p_br = sub.add_parser("brightness", parents=[common])
     p_br.add_argument("pct", type=int, nargs="?", default=None,
@@ -1596,6 +1691,8 @@ def main(argv=None) -> int:
         else:
             print("! замер невозможен: %s" % res.get("reason"))
         return 0 if res.get("ok") else 1
+    if a.cmd == "phase":
+        return emit(phase_stabilize(a.target, a.dur), a.json)
     if a.cmd == "cascade-off":
         return emit(cascade_off(), a.json)
     if a.cmd == "brightness":

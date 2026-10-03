@@ -21,9 +21,9 @@ laptop fan control, CPU/GPU power limits 5–25 W, Textual TUI, Arch/Hyprland.*
 
 ## Screenshots (TUI)
 
-![Victus Suite TUI screenshot: Power tab with whole-laptop 5–25 W cap slider, CPU cap and on-screen power hints](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-power.png)
+![Victus Suite TUI screenshot: Power tab with the whole-laptop watt slider on fixed 8/10/15/20/25 W steps, CPU cap and on-screen power hints](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-power.png)
 
-*Power tab — whole-laptop power cap slider with on-screen hints and battery ETA.*
+*Power tab — whole-laptop power cap on fixed watt steps, with on-screen hints, a settling timer and battery ETA.*
 
 ![Victus Suite TUI screenshot: Backlight tab with keyboard brightness slider and per-key RGB controls](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-backlight.png)
 
@@ -324,14 +324,14 @@ on average. The tab toggles a system-wide, fully reversible cap.
 | Control | What it does |
 |---|---|
 | **Typewriter switch** | PL1 = N W, PL2 = 2·N, `max_perf_pct = 20 + (N-5)·2`, per-CPU frequency ceiling `1.0 + 0.08·(N-5)` GHz (clamped by `cpuinfo_max_freq`), dGPU → `power/control=auto` (parks in D3cold). Every value it overwrites is captured first. |
-| **Watt slider 5..25** | the same cap, retuned live (click, arrows, PgUp/PgDn, Home/End, wheel); the slider goes dead while the mode is off. |
+| **Watt slider — five fixed steps 8/10/15/20/25 W** | the same system-wide cap, retuned live; click, arrows, PgUp/PgDn, Home/End and the wheel all snap to the nearest step and the caption lists them, so the UI can never promise a wattage the hardware does not hold; dead while the mode is off. |
 | **Readout** | CPU watts from RAPL (reacts to the slider immediately) and a running average from `energy_now` — the EC's `power_now` lags by seconds and steps, so it is not shown as a live figure; plus charge %, ETA to empty — so the honest answer is visible when 5 h is out of reach (a browser + editor sits at 12-16 W). |
 | **Switch off** | full revert: PL1/PL2, perf cap, freq ceiling, dGPU control and the previous fan mode all come back (`.bak` in `state/power_prev.json`). |
 
 `sudo victus-power watts N` applies the same plan from the CLI (refuses with
 rc=1 while the mode is off).
 
-### One slider for the whole laptop (cascade 5–25 W)
+### One slider for the whole laptop (cascade on fixed 8/10/15/20/25 W steps)
 
 Throttling the CPU alone cannot hit a watt target: the measured non-CPU floor
 (screen, SoC, radio, board) is **~4.5–7 W** depending on load, and brightness
@@ -347,16 +347,34 @@ out loud (report: `vertil/docs/2026-10-03-power-floor-report.md`):
 | 9–13 W | + brightness 8–12 %, Bluetooth off, background polling slowed |
 | 5–8 W | + brightness 3–5 %, freq ceiling ≤ 1.0 GHz, keyboard backlight off |
 
-What happens when you move the slider:
+Only **five points** are offered — 8, 10, 15, 20, 25 W — because those are
+the ones the hardware actually holds: PL1 and the frequency ceiling are whole
+watts and the brightness/BT/USB tiers are stepped, so a "13 W" promise would
+be a lie from the first second. The bar snaps to the nearest point, the
+caption names the steps, and a target once chosen does not drift back to the
+previous one while a phase is still running.
 
-1. the cascade is written (PL1/PL2, perf cap, frequency ceiling, brightness,
-   radio, USB, dGPU parked) and the panel is forced to **60 Hz**;
-2. the helper **waits 4 s and measures for 30 s from the battery**
-   (`energy_now` / `power_now`);
+What happens when you move the slider (two stages, so the UI never hangs on
+"almost done"):
+
+1. **stage 1 — fast (1–3 s).** The cascade is written (PL1/PL2, perf cap,
+   frequency ceiling, brightness, radio, USB, dGPU parked) and the panel is
+   forced to **60 Hz**; the hint under the slider immediately shows the
+   *plan* — what was switched off, the refresh rate and the battery ETA — so
+   you are not left waiting 34 s in silence;
+2. **stage 2 — settling with a visible timer.** The helper rests 4 s and
+   measures for 30 s from the battery (`energy_now` / `power_now`); the
+   status line and the bottom line tick second by second
+   (`Settling before the measurement: 3 s left…` →
+   `Power settling: 27 s of 30 left…`, plus an extra stage if the window
+   closes while the hardware is still settling) and the live watts are
+   replaced by that countdown, so the jumping numbers of adaptation are not
+   passed off as a reading;
 3. if the measured total is above the target, the CPU budget is trimmed and
-   the measurement is repeated (floor: 3 W on the package);
-4. the verdict is reported as a number: `Target 10 W → actual 12.2 W · CPU 4 ·
-   platform 8`, or `Target 10 W not reached: actual 12.2 W, plan floor 11.5 W`.
+   another phase runs (floor: 3 W on the package);
+4. only when the run ends is the verdict fixed as a number: `Target 10 W →
+   actual 12.2 W · CPU 4 · platform 8`, or `Target 10 W not reached: actual
+   12.2 W, plan floor 11.5 W`.
 
 The bottom line of the tab renders the same numbers **live** (target vs actual
 vs CPU vs platform, colour-coded; on AC it says the draw is not measurable),
