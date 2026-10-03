@@ -45,6 +45,11 @@ _LIVE_MODES = (power_core.MODE_TYPEWRITER, power_core.MODE_PARTIAL)
 
 TARGET_HOURS_W = 9.4
 POLL_S = 5.0
+# Окно стабилизации: 4 с покоя + 60 с замера. Полминуты не хватало, чтобы
+# железо и фон вышли на плато — вердикты «цель не берётся» приходили на
+# полусыром замере, а на 60 с квант шкалы energy_now падает с 1.2 до 0.6 Вт
+PHASE_SETTLE = 4
+PHASE_DUR = 60
 
 MODE_LABELS = {
     power_core.MODE_TYPEWRITER: "tui.pwr_state_on",
@@ -121,12 +126,58 @@ class WattsBar(Static):
             self.bar = bar
             self.value = value
 
-    def render(self):
-        span = max(8, (self.size.width or 40) - 7)
+    def _span(self) -> int:
+        return max(16, (self.size.width or 40) - 7)
+
+    def _ticks(self, span: int) -> list[tuple[int, int, int]]:
+        """Позиции подписей ступеней на линейке: (начало, конец, значение).
+
+        Формула та же, что у самой полосы (`round(frac * span)`), поэтому
+        цифра 15 стоит ровно под границей заливки — иначе разметка врала
+        бы на пару символов и «где моя точка» приходилось бы угадывать.
+        """
+        out = []
+        for s in self.SNAPS:
+            pos = int(round((s - self.MIN) / (self.MAX - self.MIN) * span))
+            pos = max(0, min(span - 1, pos))
+            label = str(s)
+            start = min(max(0, pos - len(label) // 2),
+                        max(0, span - len(label)))
+            out.append((start, min(span, start + len(label)), s))
+        return sorted(out)
+
+    def render(self) -> Text:
+        """Полоса + линейка делений под ней.
+
+        Вторая строка — не украшение: без неё «магнит» читается как
+        поломка (цифры вдруг прыгают сами). С номерами ступеней на своём
+        месте сразу видно и границы шкалы, и куда попадает текущее
+        значение: подписанная точка горит тем же золотом, что и полоса.
+        """
+        span = self._span()
         frac = (self.value - self.MIN) / (self.MAX - self.MIN)
         n = max(0, min(span, int(round(frac * span))))
-        return Text("%s %2d %s" % ("█" * n + "░" * (span - n),
-                                          self.value, t("tui.unit_w")))
+        suffix = " %2d %s" % (self.value, t("tui.unit_w"))
+        text = Text()
+        text.append("█" * n, style="#ffd766")
+        text.append("░" * (span - n), style="#4a4a4a")
+        text.append(suffix, style="#ffd766")
+        text.append("\n")
+
+        cur = 0
+        for start, end, snap in self._ticks(span):
+            if start < cur:
+                start = cur                      # теснота — не бывает, но вдруг
+            if start > cur:
+                text.append("·" * (start - cur), style="#3f3f3f")
+            here = (snap == self.value)
+            text.append(str(snap)[:max(0, end - start)],
+                        style="bold #ffd766" if here else "#9a9a9a")
+            cur = end
+        if cur < span:
+            text.append("·" * (span - cur), style="#3f3f3f")
+        text.append(" " * len(suffix))
+        return text
 
     def _set(self, want, notify: bool = True) -> None:
         want = self.snap(want)
@@ -223,13 +274,15 @@ class PowerTab(Vertical):
                                      classes="vblock")
                 with Vertical(id="p-readouts"):
                     yield Static("", id="p-lines", classes="vblock")
-            # нижняя строка: СКОЛЬКО ноут тянет ПО ФАКТУ (из батареи)
-            with Horizontal(id="p-live"):
-                yield Static("", id="p-live-text")
+        # статус/вердикт каскада («цель 8 Вт не берётся, факт 11 Вт»)
         with Horizontal(id="pstatusline"):
             with Horizontal(id="pstatus-flow"):
                 yield Static("", id="pstatus-tag")
                 yield Static("", id="pstatus")
+        # живой замер — СРАЗУ ПОД вердиктом и не замирает после него:
+        # тик опроса обновляет цифру каждые POLL_S, пока вкладка открыта
+        with Horizontal(id="p-live"):
+            yield Static("", id="p-live-text")
 
     def _hint(self) -> str:
         return (t("tui.pwr_hint_typewriter") if self.typewriter
@@ -465,7 +518,7 @@ class PowerTab(Vertical):
         if st.get("on_ac"):
             out.append(t("tui.pwr_sys_ac"))
         else:
-            # Цифры берём из ПОСЛЕДНЕГО ЗАМЕРА каскада (окно 30 с), а не из
+            # Цифры берём из ПОСЛЕДНЕГО ЗАМЕРА каскада (окно 60 с), а не из
             # мгновенного среднего: подсказка и статус обязаны говорить об
             # одном и том же, иначе экран одновременно пишет «цель взята» и
             # «цель недостижима». Живые ватты для этого и есть нижняя строка.
@@ -512,7 +565,7 @@ class PowerTab(Vertical):
         Две стадии — чтобы интерфейс не висел в «почти всё готово»:
           1. `cascade --no-stabilize` (~1–3 с): железо меняется сразу, и
              подсказка показывает ПЛАН (что выключено, какая герцовка, ETA);
-          2. `phase` (4 с покоя + окно 30 с): статус и нижняя строка тикают
+          2. `phase` (4 с покоя + окно 60 с): статус и нижняя строка тикают
              секунда в секунду, финальные цифры фиксируются только в конце.
         Между фазами по необходимости ужимается бюджет CPU.
         """
@@ -596,19 +649,18 @@ class PowerTab(Vertical):
             self._rerun_pending()
 
     async def _phase(self, target: int) -> dict:
-        """Одна фаза стабилизации с видимым таймером (4 с покоя + 30 с окно).
+        """Одна фаза стабилизации с видимым таймером (4 с покоя + 60 с окно).
 
         Пока хелпер меряет, статус и нижняя строка тикают по трём стадиям,
         чтобы цифры совпадали с реальностью: покой (4 с, система успокаивается
-        после записи) → замер (окно 30 с) → перерыв (окно уже прошло, но
+        после записи) → замер (окно 60 с) → перерыв (окно уже прошло, но
         железо ещё присаживается). Прыгающие ватты в этот момент не показываем:
         это адаптация железа, а не поломка программы.
         """
-        settle, dur = 4, 30
-        elapsed = 0
+        settle, dur = PHASE_SETTLE, PHASE_DUR
         stop = asyncio.Event()
 
-        def tick_text() -> tuple[str, object]:
+        def tick_text(elapsed: int) -> tuple[str, int]:
             if elapsed < settle:
                 return "calm", settle - elapsed
             if elapsed < settle + dur:
@@ -616,9 +668,14 @@ class PowerTab(Vertical):
             return "over", elapsed - settle - dur
 
         async def ticker():
-            nonlocal elapsed
+            # Отсчёт считается от НАСТОЯЩЕГО времени, а не «+1 за итерацию»:
+            # под нагрузкой event loop отстаёт (замерено: 1.5 с на тик), и
+            # счётчик накапливал долги — вердикт приходил, когда на экране
+            # ещё стояло «осталось 18 с». Теперь цифра всегда честная,
+            # просто пропущенные секунды не показываются.
+            start = time.monotonic()
             while not stop.is_set():
-                stage, n = tick_text()
+                stage, n = tick_text(int(time.monotonic() - start))
                 self._stab = {"stage": stage, "n": n, "target": target}
                 if stage == "calm":
                     self._set_status(t("tui.pwr_stab_calm", s=n), warn=True)
@@ -631,7 +688,6 @@ class PowerTab(Vertical):
                     await asyncio.sleep(1.0)
                 except asyncio.CancelledError:
                     return
-                elapsed += 1
 
         task = asyncio.create_task(ticker())
         try:
@@ -663,7 +719,8 @@ class PowerTab(Vertical):
         if bat.get("hours") and not (self._st or {}).get("on_ac"):
             out.append(t("tui.pwr_sys_eta", h1=_f1(bat["hours"] * 0.85),
                          h2=_f1(bat["hours"] * 1.05)))
-        out.append(t("tui.pwr_sys_stabilizing"))
+        out.append(t("tui.pwr_sys_stabilizing", s=PHASE_SETTLE, d=PHASE_DUR,
+                     t=PHASE_SETTLE + PHASE_DUR))
         hint.update(Text(" ".join(out)))
 
     @staticmethod
@@ -738,7 +795,10 @@ class PowerTab(Vertical):
         if st.get("on_ac"):
             widget.update(Text(t("tui.pwr_live_ac", c=c), style="#8a8a8a"))
             return
-        fact = st.get("total_w")
+        # мониторинг после вердикта: если среднее по энергии ещё не
+        # накопилось (первые ~12 с), берём сглаженное мгновенное — цифра
+        # должна быть на месте сразу, а не через две минуты
+        fact = st.get("total_w") or st.get("total_inst_w")
         f = _f1(fact) if fact else "—"
         target = st.get("target")
         if target:

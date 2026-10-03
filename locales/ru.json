@@ -176,7 +176,7 @@
   "tui.pwr_stab_trim": "Замер говорит {c} % CPU — ужимаю и меряю заново…",
   "tui.pwr_live_stab": "Стабилизация: осталось {s} с…",
   "tui.pwr_live_stab_more": "Замер: {e} с сверх окна…",
-  "tui.pwr_sys_stabilizing": "Идёт стабилизация (~34 с).",
+  "tui.pwr_sys_stabilizing": "Стабилизация: покой {s} с + замер {d} с (~{t} с).",
   "tui.pwr_sys_fact": "факт {f} Вт",
   "tui.pwr_sys_gap": "цель недостижима — минимум этой платформы {m} Вт",
   "tui.pwr_sys_ac": "на зарядке расход не меряется",

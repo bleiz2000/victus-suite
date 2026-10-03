@@ -94,7 +94,7 @@ Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 | `victus-kbd get` / `dump [start] [len]` | current RGB / EC dump | yes |
 | `victus-kbd power on\|off\|toggle` | backlight on/off — writes EC **and** `state/last_state.json` (the tab follows it) | yes |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | vertil fans (hwmon PWM) | via the rule above |
-| `victus-power status\|snapshot\|apply\|restore\|watts N\|cascade N\|cascade-off\|brightness N\|measure\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **whole-laptop cascade (screen/radio/USB) with a 30 s post-apply measurement**, **honest draw over a 40 s window**, **live CPU draw (RAPL)** | via the NOPASSWD rule |
+| `victus-power status\|snapshot\|apply\|restore\|watts N\|cascade N\|cascade-off\|brightness N\|measure\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **whole-laptop cascade (screen/radio/USB) with a 60 s post-apply measurement**, **honest draw over a 40 s window**, **live CPU draw (RAPL)** | via the NOPASSWD rule |
 | `ColorMaker list\|add\|rm\|palette` | named colors (english only) | no |
 | `Changer <name\|R G B\|#RRGGBB\|random\|off>` | apply color | asks sudo |
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
@@ -352,7 +352,10 @@ the ones the hardware actually holds: PL1 and the frequency ceiling are whole
 watts and the brightness/BT/USB tiers are stepped, so a "13 W" promise would
 be a lie from the first second. The bar snaps to the nearest point, the
 caption names the steps, and a target once chosen does not drift back to the
-previous one while a phase is still running.
+previous one while a phase is still running. **A ruler sits under the bar**:
+every step number is printed directly under its own graduation, the active
+one burns gold, the gaps are small dots — the scale boundaries and where the
+selection lands are visible at a glance.
 
 What happens when you move the slider (two stages, so the UI never hangs on
 "almost done"):
@@ -362,11 +365,16 @@ What happens when you move the slider (two stages, so the UI never hangs on
    forced to **60 Hz**; the hint under the slider immediately shows the
    *plan* — what was switched off, the refresh rate and the battery ETA — so
    you are not left waiting 34 s in silence;
-2. **stage 2 — settling with a visible timer.** The helper rests 4 s and
-   measures for 30 s from the battery (`energy_now` / `power_now`); the
-   status line and the bottom line tick second by second
+2. **stage 2 — settling with a visible timer, a 60 s window.** The helper
+   rests 4 s and measures for a **full minute** from the battery
+   (`energy_now` / `power_now`): 30 s was not enough for the CPU and the
+   background to reach a plateau, so verdicts like "target not reached"
+   arrived on a half-settled measurement. On a 60 s window the quantum of
+   the `energy_now` scale (10 mWh) drops from 1.2 to **0.6 W** and the
+   energy integral is used instead of the lagging `power_now`. The status
+   line and the bottom line tick against wall-clock time
    (`Settling before the measurement: 3 s left…` →
-   `Power settling: 27 s of 30 left…`, plus an extra stage if the window
+   `Power settling: 27 s of 60 left…`, plus an extra stage if the window
    closes while the hardware is still settling) and the live watts are
    replaced by that countdown, so the jumping numbers of adaptation are not
    passed off as a reading;
@@ -376,10 +384,14 @@ What happens when you move the slider (two stages, so the UI never hangs on
    actual 12.2 W · CPU 4 · platform 8`, or `Target 10 W not reached: actual
    12.2 W, plan floor 11.5 W`.
 
-The bottom line of the tab renders the same numbers **live** (target vs actual
-vs CPU vs platform, colour-coded; on AC it says the draw is not measurable),
-and the hint under the slider repeats the last measured verdict plus the ETA —
-hint and status can never disagree, because both read the same measurement.
+**Monitoring does not stop with the verdict.** The live-wattage line sits
+**directly under the verdict line** (target vs actual vs CPU vs platform,
+colour-coded; on AC it says the draw is not measurable and shows RAPL) and
+refreshes every 5 s for as long as the tab is open — after
+`Target 8 W not reached: actual 11.2 W` the number keeps moving while the
+verdict stays put. The hint under the slider repeats the last measured
+verdict plus the ETA — hint and status can never disagree, because both
+read the same measurement.
 
 Honest limits measured on this machine with a browser + editor running:
 the floor sits at **~9–11 W**, so targets ≥ 10–12 W are taken, and 5–8 W are

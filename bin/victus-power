@@ -1060,7 +1060,7 @@ def measure_total(dur: float = 8.0) -> dict:
 
 
 def cascade_apply(target, cpu=None, stabilize: bool = True,
-                  dur: float = 30.0) -> dict:
+                  dur: float = 60.0) -> dict:
     """Каскад на цель T Вт: CPU-потолок + экран + радио + USB + подсветка.
 
     После применения система ЗАМЕРЯЕТСЯ от батареи и, если факт выше цели
@@ -1218,7 +1218,7 @@ def _verdict(plan: dict, meas: dict, rapl):
     return platform, next_cpu
 
 
-def phase_stabilize(target: int, dur: float = 30.0) -> dict:
+def phase_stabilize(target: int, dur: float = 60.0) -> dict:
     """Одна фаза стабилизации для TUI: покой → замер → вердикт, БЕЗ записи.
 
     Отдельная команда нужна только ради таймера: TUI между фазами рисует
@@ -1638,15 +1638,15 @@ def main(argv=None) -> int:
     p_cas.add_argument("target", type=int, help="цель по всей системе 5..25 Вт")
     p_cas.add_argument("--cpu", type=int, default=None,
                        help="ручной потолок CPU 3..25 Вт")
-    p_cas.add_argument("--dur", type=float, default=30.0,
-                       help="окно замера факта, с (3..60)")
+    p_cas.add_argument("--dur", type=float, default=60.0,
+                       help="окно замера факта, с (3..60), по умолчанию 60")
     p_cas.add_argument("--no-stabilize", action="store_true",
                        help="не замерять и не подтягивать план к цели")
     p_ph = sub.add_parser("phase", parents=[common])
     p_ph.add_argument("--target", type=int, required=True,
                       help="текущая цель по всей системе, Вт")
-    p_ph.add_argument("--dur", type=float, default=30.0,
-                      help="окно замера, с (3..60)")
+    p_ph.add_argument("--dur", type=float, default=60.0,
+                      help="окно замера, с (3..60), по умолчанию 60")
     sub.add_parser("cascade-off", parents=[common])
     p_br = sub.add_parser("brightness", parents=[common])
     p_br.add_argument("pct", type=int, nargs="?", default=None,

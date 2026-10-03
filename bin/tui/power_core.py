@@ -461,40 +461,42 @@ def set_watt_limit(watt: int) -> dict:
 
 
 def cascade_set(target: int, cpu: int | None = None,
-                stabilize: bool = True, dur: float = 30.0) -> dict:
+                stabilize: bool = True, dur: float = 60.0) -> dict:
     """Каскад на цель по ВСЕМУ ноутбуку (TUI: 8/10/15/20/25; CLI: 5..25).
 
     Стабилизация (по умолчанию вкл): хелпер после применения меряет факт
     от батареи и стягивает бюджет CPU к цели.
 
-    Окно замера 30 с не случайно: шкала energy_now на BAT1 шагает по
-    10 мWh — на 8-секундном окне это квант 4.5 Вт (мы одно время «мерили»
-    4.5 Вт там, где ноут тянет 9). На 30 с остаётся ~0.6 Вт неточности.
-    Вызов занимает до ~70 с: спокойное окно до ужатий, а не мгновенный
-    красивый ответ, которого система не смогла бы подтвердить.
+    Окно замера **60 с** не случайно: шкала energy_now на BAT1 шагает по
+    10 мWh, поэтому квант измерения = 36/окно[с] Вт — на 8-секундном окне
+    это 4.5 Вт (мы одно время «мерили» 4.5 Вт там, где ноут тянет 9), на
+    30 с — 1.2 Вт, а на 60 с всего 0.6 Вт. Полминуты к тому же не хватает,
+    чтобы CPU и фон успокоились: вердикт «цель не берётся» приходил на
+    полусыром железе. Вызов занимает до ~4 мин при ужатиях.
     """
     argv = ["sudo", "-n", POWER, "cascade", str(int(target)), "--json"]
     if cpu is not None:
         argv += ["--cpu", str(int(cpu))]
     argv += (["--dur", str(float(dur))] if stabilize else ["--no-stabilize"])
-    data, err = _json(argv, timeout=150.0)
+    data, err = _json(argv, timeout=360.0)
     if data is None:
         return {"mode": "cascade", "applied": [], "failed": [err or "cascade"],
                 "steps": []}
     return data
 
 
-def phase(target: int, dur: float = 30.0) -> dict:
+def phase(target: int, dur: float = 60.0) -> dict:
     """Одна фаза стабилизации: покой 4 с → замер → вердикт (без записи).
 
     Разделение нужно только ради честного таймера в интерфейсе: пока хелпер
     меряет, TUI показывает «Стабилизация: ~N с», а не молча висит. В ответе —
     measure (факт/плата/min_w/feasible) и next_cpu: на сколько ужать CPU,
-    если цель не взята.
+    если цель не взята. Окно по умолчанию 60 с (квант шкалы 0.6 Вт вместо
+    1.2 Вт на 30 с) — фаза занимает ~65 с.
     """
     data, err = _json(["sudo", "-n", POWER, "phase",
                        "--target", str(int(target)), "--dur", str(float(dur)),
-                       "--json"], timeout=180.0)
+                       "--json"], timeout=240.0)
     return data if isinstance(data, dict) else {"mode": "phase",
                                                 "failed": [err or "phase"]}
 

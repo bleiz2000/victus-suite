@@ -176,7 +176,7 @@
   "tui.pwr_stab_trim": "Measurement says {c} % CPU — trimming and measuring again…",
   "tui.pwr_live_stab": "Settling: {s} s left…",
   "tui.pwr_live_stab_more": "Measuring: {e} s past the window…",
-  "tui.pwr_sys_stabilizing": "Settling (~34 s).",
+  "tui.pwr_sys_stabilizing": "Settling: {s} s calm + {d} s measurement (~{t} s).",
   "tui.pwr_sys_fact": "actual {f} W",
   "tui.pwr_sys_gap": "target unreachable — this platform bottoms out at {m} W",
   "tui.pwr_sys_ac": "on AC — draw cannot be measured",

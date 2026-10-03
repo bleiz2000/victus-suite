@@ -314,7 +314,8 @@ class VictusApp(App):
     }
     #pwr-watts {
         width: 100%;
-        height: 1;
+        /* полоса + линейка делений 8/10/15/20/25 (см. WattsBar.render) */
+        height: 2;
         color: #ffd766;
         background: #0d1117;
     }
