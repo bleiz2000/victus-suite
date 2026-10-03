@@ -16,6 +16,23 @@ Local project folder: `~/Work/victus-suite` → GitHub `victus-suite`.
 stage 2 (TUI on Textual), stage 3 (effects and power profiles).
 Details — `START_DEVELOPMENT.md` §4.
 
+Keywords: *HP Victus keyboard backlight Linux, OMEN Gaming Hub for Linux,
+laptop fan control, CPU/GPU power limits 5–25 W, Textual TUI, Arch/Hyprland.*
+
+## Screenshots (TUI)
+
+![Victus Suite TUI screenshot: Power tab with whole-laptop 5–25 W cap slider, CPU cap and on-screen power hints](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-power.png)
+
+*Power tab — whole-laptop power cap slider with on-screen hints and battery ETA.*
+
+![Victus Suite TUI screenshot: Backlight tab with keyboard brightness slider and per-key RGB controls](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-backlight.png)
+
+*Backlight tab — HP Victus keyboard brightness 0–100 % and per-key RGB.*
+
+![Victus Suite TUI screenshot: Fans tab with fan curve editor and live RPM readout](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-fans.png)
+
+*Fans tab — fan curves, manual control and SMART autopilot with live RPM.*
+
 ## Installation (v1.2.0)
 
 **From a release (recommended):**
@@ -77,7 +94,7 @@ Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 | `victus-kbd get` / `dump [start] [len]` | current RGB / EC dump | yes |
 | `victus-kbd power on\|off\|toggle` | backlight on/off — writes EC **and** `state/last_state.json` (the tab follows it) | yes |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | vertil fans (hwmon PWM) | via the rule above |
-| `victus-power status\|snapshot\|apply\|restore\|watts N\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **live CPU draw (RAPL)** | via the NOPASSWD rule |
+| `victus-power status\|snapshot\|apply\|restore\|watts N\|cascade N\|cascade-off\|brightness N\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **whole-laptop cascade (screen/radio/USB)**, **live CPU draw (RAPL)** | via the NOPASSWD rule |
 | `ColorMaker list\|add\|rm\|palette` | named colors (english only) | no |
 | `Changer <name\|R G B\|#RRGGBB\|random\|off>` | apply color | asks sudo |
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
@@ -313,6 +330,33 @@ on average. The tab toggles a system-wide, fully reversible cap.
 
 `sudo victus-power watts N` applies the same plan from the CLI (refuses with
 rc=1 while the mode is off).
+
+### Whole-laptop cascade (second slider)
+
+Throttling the CPU alone cannot hit the target: the measured non-CPU floor
+(screen, SoC, radio, board) is **~6 W quiet / ~8 W generous**, and brightness
+alone spans **+4.8 W** between 5 % and 100 %. The **Whole-laptop cap** slider
+therefore plans the whole machine (see `vertil/docs/2026-10-03-power-floor-report.md`):
+
+| Target | Plan on top of the CPU cap |
+|---|---|
+| 18–25 W | brightness 55 %, Wi-Fi power-save |
+| 13–17 W | + brightness 30 %, freq ceiling 1.7 GHz, USB autosuspend (2 s) |
+| 9–12 W | + brightness 15 %, Bluetooth off, background polling slowed |
+| 5–8 W | + brightness 8 %, freq ceiling 1.0 GHz |
+
+Every step the cascade performed is shown as a hint under the slider
+(`CPU ≤ 1.3 GHz · screen 60 Hz · brightness 15 % · Bluetooth off …`) plus the
+expected battery range. The CPU slider keeps working on its own; brightness,
+Bluetooth and USB are snapshotted first and restored by
+`sudo victus-power cascade-off` — switching the mode off does that too.
+
+```bash
+sudo victus-power cascade 10        # whole-machine plan for 10 W
+sudo victus-power cascade 10 --cpu 7
+sudo victus-power cascade-off       # restore brightness / Bluetooth / USB
+sudo victus-power brightness 45     # backlight in percent
+```
 
 ### Keyboard backlight hotkeys
 

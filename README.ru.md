@@ -16,6 +16,24 @@
 этап 2 (TUI на Textual), этап 3 (эффекты и профили питания).
 Подробности — `START_DEVELOPMENT.md` §4.
 
+Ключевые слова: *подсветка клавиатуры HP Victus Linux, аналог OMEN Gaming Hub
+для Linux, управление вентиляторами ноутбука, ограничение мощности CPU/GPU
+5–25 Вт, TUI на Textual, Arch/Hyprland.*
+
+## Скриншоты (TUI)
+
+![Скриншот TUI Victus Suite: вкладка «Питание» с ползунком потолка мощности 5–25 Вт, лимитом CPU и подсказками](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-power.png)
+
+*Вкладка «Питание» — ползунок потолка мощности всей системы, подсказки и ETA батареи.*
+
+![Скриншот TUI Victus Suite: вкладка «Подсветка» с линией яркости клавиатуры и RGB-управлением](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-backlight.png)
+
+*Вкладка «Подсветка» — яркость клавиатуры 0–100 % и RGB по клавишам.*
+
+![Скриншот TUI Victus Suite: вкладка «Вентиляторы» с редактором кривых и RPM](https://github.com/bleiz2000/victus-suite/releases/download/v1.2.0/victus-suite-tui-fans.png)
+
+*Вкладка «Вентиляторы» — кривые, ручное управление и автопилот SMART с RPM.*
+
 ## Установка (v1.2.0)
 
 **Из релиза (рекомендуется):**
@@ -77,7 +95,7 @@ victus-tray            # трей: открыть окно / старт-стоп
 | `victus-kbd get` / `dump [start] [len]` | Текущий RGB / дамп EC | да |
 | `victus-kbd power on\|off\|toggle` | Вкл/выкл подсветки — пишет и EC, и `state/last_state.json` (вкладка подхватывает) | да |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | вентиляторы vertil (PWM в hwmon) | по правилу выше |
-| `victus-power status\|snapshot\|apply\|restore\|watts N\|draw` | режимы питания: точка отката, «Печатная машинка», потолок 5–25 Вт, **живая мощность CPU (RAPL)** | по NOPASSWD-правилу |
+| `victus-power status\|snapshot\|apply\|restore\|watts N\|cascade N\|cascade-off\|brightness N\|draw` | режимы питания: точка отката, «Печатная машинка», потолок 5–25 Вт, **каскад на всю систему (экран/радио/USB)**, **живая мощность CPU (RAPL)** | по NOPASSWD-правилу |
 | `ColorMaker list\|add\|rm\|palette` | Именованные цвета (только english) | нет |
 | `Changer <имя\|R G B\|#RRGGBB\|random\|off>` | Применить цвет | спросит sudo |
 | `Changer cycle-red` | **Цикл ярко-красных** (red/fire/scarlet/darkred) | спросит sudo |
@@ -313,6 +331,33 @@ headless-смоук-сьютом и прогнаны на живом желез�
 | **Тумблер выкл** | полный откат: PL1/PL2, потолок производительности, частоты, дискретка и прежний режим вентиляторов возвращаются (`.bak` в `state/power_prev.json`). |
 
 То же самое из CLI: `sudo victus-power watts N` (rc=1, если режим выключен).
+
+### Каскад на всю систему (второй ползунок)
+
+Одного потолка на CPU мало: измеренный пол непроцессорных расходов —
+**~6 Вт тихо / ~8 Вт щедро**, а одна только яркость даёт **+4.8 Вт**
+между 5 % и 100 %. Поэтому ползунок **«Потолок ноутбука»** планирует
+весь ноутбук (отчёт — `vertil/docs/2026-10-03-power-floor-report.md`):
+
+| Цель | Что делается поверх потолка CPU |
+|---|---|
+| 18–25 Вт | яркость 55 %, Wi-Fi power-save |
+| 13–17 Вт | + яркость 30 %, потолок частоты 1.7 ГГц, USB autosuspend (2 с) |
+| 9–12 Вт | + яркость 15 %, Bluetooth выкл, фоновый опрос режется |
+| 5–8 Вт | + яркость 8 %, потолок частоты 1.0 ГГц |
+
+Всё, что каскад сделал, показывается подсказкой под ползунком
+(`CPU ≤ 1.3 ГГц · экран 60 Гц · яркость 15% · Bluetooth выкл …`) плюс
+ожидаемый диапазон часов. Ползунок CPU продолжает работать отдельно;
+яркость, Bluetooth и USB сначала снимаются в снимок и возвращаются
+`sudo victus-power cascade-off` — выключение режима делает то же самое.
+
+```bash
+sudo victus-power cascade 10        # план на 10 Вт на весь ноутбук
+sudo victus-power cascade 10 --cpu 7
+sudo victus-power cascade-off       # вернуть яркость / Bluetooth / USB
+sudo victus-power brightness 45     # подсветка в процентах
+```
 
 ### Горячие клавиши подсветки
 
