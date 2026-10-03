@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -116,7 +117,10 @@ def set_refresh(mon: dict, hz: float) -> bool:
         mode = "%dx%d@%.3f" % (mon["w"], mon["h"], hz)
 
     if shutil.which("wlr-randr"):
-        rc, _o, _e = run(["wlr-randr", "--output", mon["name"], "--mode", mode])
+        # ГОТОВЫЙ mode из Hyprland («1920x1080@60.00Hz») wlr-randr отвергает:
+        # у панели rate 60.004002, а не 60.00. Точный режим достаём сами.
+        exact = _wlr_mode_name(mon["name"], hz) or mode
+        rc, _o, _e = run(["wlr-randr", "--output", mon["name"], "--mode", exact])
         if rc == 0 and _refresh_ok(mon["name"], hz):
             return True
     # запасной путь (старые Hyprland)
@@ -125,6 +129,27 @@ def set_refresh(mon: dict, hz: float) -> bool:
     run(["hyprctl", "keyword", "monitor", spec])
     return _refresh_ok(mon["name"], hz)
 
+
+def _wlr_mode_name(name: str, hz: float) -> str | None:
+    """Точный режим из вывода wlr-randr: «1920x1080 px, 60.004002 Hz».
+
+    Строка mode из Hyprland округлена (60.00Hz), а wlr-randr сверяет её с
+    EDID-таймингом и печатает «unknown mode» — из-за этого сброс герцовки
+    на 60 Гц молча не применялся и подсказка врала про 60 при реальных 144.
+    """
+    rc, out, _e = run(["wlr-randr", "--output", name])
+    if rc != 0:
+        return None
+    best, best_d = None, 1e9
+    for line in out.splitlines():
+        m = re.match(r"\s*(\d+)x(\d+) px, ([\d.]+) Hz", line)
+        if not m:
+            continue
+        d = abs(float(m.group(3)) - float(hz))
+        if d < best_d:
+            best = "%sx%s@%s" % (m.group(1), m.group(2), m.group(3))
+            best_d = d
+    return best if best_d <= 1.0 else None
 
 def _refresh_ok(name: str, hz: float, wait: float = 1.5) -> bool:
     """Композитор применяет режим не мгновенно — дождаться и сверить."""
@@ -431,17 +456,40 @@ def set_watt_limit(watt: int) -> dict:
     return res
 
 
-def cascade_set(target: int, cpu: int | None = None) -> dict:
-    """Каскад на цель по ВСЕМУ ноутбуку (5..25 Вт) + ручной потолок CPU."""
+def cascade_set(target: int, cpu: int | None = None,
+                stabilize: bool = True, dur: float = 30.0) -> dict:
+    """Каскад на цель по ВСЕМУ ноутбуку (5..25 Вт).
+
+    Стабилизация (по умолчанию вкл): хелпер после применения меряет факт
+    от батареи и стягивает бюджет CPU к цели.
+
+    Окно замера 30 с не случайно: шкала energy_now на BAT1 шагает по
+    10 мWh — на 8-секундном окне это квант 4.5 Вт (мы одно время «мерили»
+    4.5 Вт там, где ноут тянет 9). На 30 с остаётся ~0.6 Вт неточности.
+    Вызов занимает до ~70 с: спокойное окно до ужатий, а не мгновенный
+    красивый ответ, которого система не смогла бы подтвердить.
+    """
     argv = ["sudo", "-n", POWER, "cascade", str(int(target)), "--json"]
     if cpu is not None:
-        argv.insert(-1, "--cpu")
-        argv.insert(-1, str(int(cpu)))
-    data, err = _json(argv, timeout=40.0)
+        argv += ["--cpu", str(int(cpu))]
+    argv += (["--dur", str(float(dur))] if stabilize else ["--no-stabilize"])
+    data, err = _json(argv, timeout=150.0)
     if data is None:
         return {"mode": "cascade", "applied": [], "failed": [err or "cascade"],
                 "steps": []}
     return data
+
+
+def measure(dur: float = 40.0) -> dict:
+    """Честный замер потребления всей системы от батареи.
+
+    40 с — минимум, на котором шкала energy_now успевает накопить ~10
+    шагов и погрешность падает до ~0.5 Вт.
+    """
+    data, err = _json(["sudo", "-n", POWER, "measure", "--dur", str(dur),
+                       "--json"], timeout=90.0)
+    return data if isinstance(data, dict) else {"ok": False,
+                                                "reason": err or "measure"}
 
 
 def cascade_off() -> dict:
@@ -506,4 +554,27 @@ def status() -> dict:
     st["root_ok"] = root is not None
     st["mode"] = mode(root)
     st["typewriter"] = st["mode"] != MODE_NORMAL
+
+    # честная нижняя строка: сколько ноут тянет ПО ФАКТУ и из чего оно
+    # складывается. `w_inst` — сглаженный power_now (батарея, ~1 с),
+    # `avg_w` — среднее по падению энергии (стабильное, но медленное).
+    bat = st["battery"] or {}
+    status = (bat.get("status") or "").lower()
+    st["on_ac"] = "discharg" not in status
+    total = bat.get("w_inst") or bat.get("watts")
+    if st["on_ac"]:
+        total = None                    # на зарядке это ток зарядки, не расход
+    st["total_w"] = total
+    st["total_avg_w"] = None if st["on_ac"] else (bat.get("avg_w") or total)
+    cpu = st.get("cpu_w")
+    st["platform_w"] = (round(total - cpu, 1)
+                        if total is not None and cpu is not None else None)
+    # план каскада из корневого статуса (цель, ожидание, минимум, замер)
+    plan = (root or {}).get("cascade_plan") or {}
+    st["target"] = (root or {}).get("cascade_target")
+    st["expect_w"] = plan.get("expect_w")
+    st["min_w"] = plan.get("min_w")
+    st["feasible"] = plan.get("feasible")
+    st["measure"] = (root or {}).get("cascade_measure")
+    st["brightness_pct"] = (root or {}).get("brightness_pct")
     return st

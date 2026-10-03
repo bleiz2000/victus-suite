@@ -18,6 +18,7 @@ NOPASSWD `victus-kbd`, частоты/turbo/RAPL/дискретка/MUX/ради
 from __future__ import annotations
 
 import asyncio
+import time
 
 from rich.text import Text
 from textual import events, work
@@ -155,13 +156,11 @@ class PowerTab(Vertical):
         self._busy = False
         self._mode_busy = False
         self._poll = None
-        self._watts_syncing = False
-        self._watts_applied = 15
-        self._watts_pending = None
-        # каскад на цель по всему ноутбуку (второй ползунок)
+        # ОДИН ползунок: цель по всему ноутбуку (5..25 Вт)
         self._sys_target = state.get("power_target")
         self._sys_applied = None
         self._sys_syncing = False
+        self._sys_pending = None
         self._cascade_steps = []
 
     # --- композиция ---------------------------------------------------------
@@ -179,15 +178,15 @@ class PowerTab(Vertical):
                         yield Switch(value=self.typewriter, id="pwr-switch")
                     yield Static(self._hint(), id="pwr-hint", classes="vblock")
                     with Vertical(classes="vblock", id="pwr-watts-block"):
-                        yield Static("", id="pwr-watts-cap")
+                        yield Static(t("tui.pwr_sys_lbl"), id="pwr-watts-cap")
                         yield WattsBar(id="pwr-watts")
-                        yield Static(t("tui.pwr_watts_off"), id="pwr-watts-hint")
-                    with Vertical(classes="vblock", id="pwr-sys-block"):
-                        yield Static(t("tui.pwr_sys_lbl"), id="pwr-sys-cap")
-                        yield WattsBar(id="pwr-sys")
-                        yield Static(t("tui.pwr_sys_off"), id="pwr-sys-hint")
+                        yield Static(t("tui.pwr_sys_off"), id="pwr-watts-hint",
+                                     classes="vblock")
                 with Vertical(id="p-readouts"):
                     yield Static("", id="p-lines", classes="vblock")
+            # нижняя строка: СКОЛЬКО ноут тянет ПО ФАКТУ (из батареи)
+            with Horizontal(id="p-live"):
+                yield Static("", id="p-live-text")
         with Horizontal(id="pstatusline"):
             with Horizontal(id="pstatus-flow"):
                 yield Static("", id="pstatus-tag")
@@ -201,6 +200,7 @@ class PowerTab(Vertical):
 
     def on_mount(self):
         self._render_lines(self._st)
+        self._render_live(self._st)
         self._boot()
         self._poll = self.set_interval(POLL_S, self._tick)
 
@@ -256,6 +256,7 @@ class PowerTab(Vertical):
             else t("tui.pwr_hint_full")))
         self._sync_watts(st, mode)
         self._render_lines(self._st)
+        self._render_live(self._st)
 
         # состояние на диске должно отражать железо, а не последний клик
         try:
@@ -325,211 +326,151 @@ class PowerTab(Vertical):
             return                          # это мы сами перетянули тумблер
         self._toggle(want)
 
-    # --- ползунок потолка мощности -----------------------------------------
+    # --- один ползунок: потолок ВСЕЙ системы -------------------------------
 
     def _sync_watts(self, st: dict, mode: str) -> None:
-        """Слайдер 5..25 Вт: работает ТОЛЬКО при включённой печатной
-        машинке, значение тянется из железа (rapl_pl1), а не из последнего
-        перетаскивания."""
+        """Единственный ползунок 5..25 Вт — цель по всему ноутбуку.
+
+        Отдельного «ползунка CPU» больше нет: он показывал потолок пакета
+        (PL1), а ноут при этом тянул на 5–7 Вт больше — пользователь видел
+        «5 Вт» и 13 Вт расхода. Значение берётся из железа (cascade.json),
+        ползунок мёртв, пока «печатная машинка» выключена.
+        """
         try:
             sl = self.query_one("#pwr-watts", WattsBar)
             cap = self.query_one("#pwr-watts-cap", Static)
             hint = self.query_one("#pwr-watts-hint", Static)
-        except Exception:                                  # noqa: BLE001
+        except Exception:                                     # noqa: BLE001
             return
-        # гасим только на время переворота тумблера: _busy включается и при
-        # записи RAPL, а если погасить ползунок в этот момент, Textual снимет
-        # с него фокус — и серия «стрелка→» вырождается в одно нажатие
         on = mode in _LIVE_MODES and not self._mode_busy
-        # status() кладёт корневой снимок в st["root"]
-        pl1 = (st.get("root") or {}).get("rapl_pl1_w")
-        try:
-            want = max(5, min(25, int(round(float(pl1)))))
-        except (TypeError, ValueError):
-            want = 15
-        cap.update(Text(t("tui.pwr_watts_lbl")))
+        want = self._target(st)
+        cap.update(Text(t("tui.pwr_sys_lbl")))
         if on:
-            # Два разных числа, которые раньше сваливались в одно:
-            #   сколько ограничен CPU  и  сколько реально тянет ноут.
-            # Ползунок не двигает дисплей и SoC, поэтому «потолок 6 Вт»
-            # рядом с «расход 22 Вт» без пояснения читается как враньё.
-            # Состояние дискретки в подсказке НЕ захардкожено: ридаут
-            # иначе врал бы друг против друга, когда карта просыпается.
-            bat = st.get("battery") or {}
-            root = st.get("root") or {}
-            # cpu_w — RAPL (мгновенно), watts — ступенчатый ЭС батареи:
-            # для мгновенной цифры берём RAPL, для оценки «сколько тянет
-            # ноут» — среднее, а не прыгающее значение.
-            cpu = st.get("cpu_w")
-            watts = bat.get("avg_w") or bat.get("watts")
-            hours = bat.get("hours")
-            try:
-                freq = int(float(root.get("max_freq_mhz") or 0))
-            except (TypeError, ValueError):
-                freq = 0
-            w_s = ("%.1f" % watts) if watts else "—"
-            c_s = ("%.1f" % cpu) if cpu else "—"
-            line = t("tui.pwr_watts_now",
-                     n=want,
-                     f=freq or "—",
-                     c=c_s,
-                     w=w_s,
-                     h=_fmt_dur(hours) if hours else "—")
-            try:
-                gap = float(watts) - TARGET_HOURS_W
-            except (TypeError, ValueError):
-                gap = None
-            if gap is not None:
-                line += (t("tui.pwr_watts_gap", d=("%.1f" % gap)) if gap > 0.1
-                         else t("tui.pwr_watts_ok5"))
-            hint.update(Text(line))
+            hint.update(Text(self._hint_text(st)))
         else:
             hint.update(Text(t("tui.pwr_watts_off")))
         if abs(float(sl.value) - want) > 0.5:
-            # это значение подтянуто из железа, а не перетянуто рукой
-            self._watts_syncing = True
-            try:
-                sl.value = want
-                self._watts_applied = want
-            finally:
-                self._watts_syncing = False
-        sl.disabled = not on
-        self._sync_sys(st, mode)
-
-    def _sync_sys(self, st: dict, mode: str) -> None:
-        """Второй ползунок: цель по ВСЕМУ ноутбуку (каскад)."""
-        try:
-            sl = self.query_one("#pwr-sys", WattsBar)
-            hint = self.query_one("#pwr-sys-hint", Static)
-        except Exception:                                  # noqa: BLE001
-            return
-        on = mode in _LIVE_MODES and not self._mode_busy
-        target = self._sys_target
-        if on and target:
-            hint.update(Text(self._sys_hint_text(st)))
-        elif on:
-            hint.update(Text(t("tui.pwr_sys_off")))
-        else:
-            hint.update(Text(t("tui.pwr_watts_off")))
-        if target and abs(float(sl.value) - int(target)) > 0.5:
+            # значение подтянуто из железа, а не перетянуто рукой
             self._sys_syncing = True
             try:
-                sl.value = int(target)
-                self._sys_applied = int(target)
+                sl.value = want
+                self._sys_applied = want
             finally:
                 self._sys_syncing = False
-        elif not target and self._sys_applied is None:
-            self._sys_applied = sl.value
         sl.disabled = not on
 
-    def _sys_hint_text(self, st: dict) -> str:
-        """«Выбрано 10 Вт: CPU ≤1.3 ГГц · экран 60 Гц · яркость 15% …»."""
-        bat = st.get("battery") or {}
-        mon = st.get("monitor") or {}
+    def _target(self, st: dict) -> int:
+        """Цель из железа (корневой статус), иначе сохранённая, иначе 15."""
+        for src in ((st or {}).get("root") or {}, st or {}):
+            val = src.get("target") or src.get("cascade_target")
+            try:
+                return max(5, min(25, int(val)))
+            except (TypeError, ValueError):
+                continue
         try:
-            hz = int(float(mon.get("hz") or 60))
+            return max(5, min(25, int(self._sys_target or 15)))
         except (TypeError, ValueError):
-            hz = 60
-        parts = []
-        for step in self._cascade_steps or []:
-            key = step.get("key")
-            if key == "cpu":
-                parts.append(t("tui.cs_cpu",
-                               f=_f1((step.get("freq") or 0) / 1e6),
-                               p=step.get("cpu")))
-            elif key == "screen":
-                parts.append(t("tui.cs_screen", hz=hz, b=step.get("bright")))
-            elif key in ("bt", "wifi", "usb", "slow", "dgpu"):
-                parts.append(t("tui.cs_%s" % key))
-        if not parts:
+            return 15
+
+    def _hw_steps(self, st: dict) -> list[str]:
+        """Что реально включено, прочитанное из ЖЕЛЕЗА, а не из плана.
+
+        Подсказка не должна врать: если Wi-Fi не ушёл в power-save или
+        яркость подняли с клавиатуры — мы пишем то, что есть на самом деле.
+        """
+        root = st.get("root") or {}
+        plan = root.get("cascade_plan") or {}
+        steps: list[str] = []
+        freq = root.get("max_freq_mhz")
+        pl1 = root.get("rapl_pl1_w")
+        if freq and pl1:
+            steps.append(t("tui.cs_cpu", f=_f1(float(freq) / 1000.0), p=pl1))
+        bright = st.get("brightness_pct")
+        hz = (st.get("monitor") or {}).get("hz")
+        if bright is not None:
+            steps.append(t("tui.cs_screen", hz=_fmt_hz(hz), b=bright))
+        if root.get("bt_soft") == "yes":
+            steps.append(t("tui.cs_bt"))
+        if root.get("wifi_power_save") == "on":
+            steps.append(t("tui.cs_wifi"))
+        if str(root.get("usb_autosuspend")) in ("2", "2.0"):
+            steps.append(t("tui.cs_usb"))
+        if root.get("dgpu_runtime") == "suspended":
+            steps.append(t("tui.cs_dgpu"))
+        if plan.get("kbd") is False:
+            steps.append(t("tui.cs_kbd"))
+        if plan.get("slow"):
+            steps.append(t("tui.cs_slow"))
+        return steps
+
+    def _hint_text(self, st: dict) -> str:
+        """«Выбрано 8 Вт: … · факт 10.4 Вт (минимум 9.7 Вт).»"""
+        target = self._target(st)
+        steps = self._hw_steps(st)
+        if not steps:
             return t("tui.pwr_sys_off")
-        hours = bat.get("hours")
-        tail = ""
-        if hours:
-            tail = " " + t("tui.pwr_sys_eta", h1=_f1(hours * 0.85),
-                           h2=_f1(hours * 1.05))
-        return t("tui.pwr_sys_hint", t=self._sys_target or "—",
-                 steps=" · ".join(parts)) + tail
+        out = [t("tui.pwr_sys_hint", t=target, steps=" · ".join(steps))]
+        if st.get("on_ac"):
+            out.append(t("tui.pwr_sys_ac"))
+        else:
+            # Цифры берём из ПОСЛЕДНЕГО ЗАМЕРА каскада (окно 30 с), а не из
+            # мгновенного среднего: подсказка и статус обязаны говорить об
+            # одном и том же, иначе экран одновременно пишет «цель взята» и
+            # «цель недостижима». Живые ватты для этого и есть нижняя строка.
+            meas = st.get("measure") or {}
+            fresh = (meas.get("w") is not None
+                     and meas.get("target") == target
+                     and time.time() - (meas.get("at") or 0) < 900)
+            fact = (meas.get("w") if fresh
+                    else (st.get("total_avg_w") or st.get("total_w")))
+            if fact:
+                out.append(t("tui.pwr_sys_fact", f=_f1(fact)))
+            plan = (st.get("root") or {}).get("cascade_plan") or {}
+            min_w = (meas.get("min_w") if fresh else None) \
+                or plan.get("min_w") or st.get("min_w")
+            if min_w and fact and fact > target + 0.7:
+                out.append(t("tui.pwr_sys_gap", m=min_w))
+            hours = (st.get("battery") or {}).get("hours")
+            if hours:
+                out.append(t("tui.pwr_sys_eta",
+                             h1=_f1(hours * 0.85), h2=_f1(hours * 1.05)))
+        return " ".join(out)
 
     def on_watts_bar_changed(self, event: WattsBar.Changed):
-        if self._busy or self._watts_syncing:
+        if event.bar.id != "pwr-watts" or self._sys_syncing:
             return
         if (self._st or {}).get("mode") not in _LIVE_MODES:
             return                      # режим выключен — ползунок мёртв
-        if event.bar.id == "pwr-sys":
-            if self._sys_syncing:
-                return
-            want = int(event.value)
-            if want == (self._sys_applied if self._sys_applied is not None
-                        else -1):
-                return
-            self._apply_cascade(want)
-            return
         want = int(event.value)
-        if want == self._watts_applied:
+        if want == (self._sys_applied if self._sys_applied is not None else -1):
             return                      # это мы сами подтянули из железа
         if self._busy:
-            # правка пришла, пока root ещё пишет прошлое значение:
-            # запоминаем и применяем последней, а не выбрасываем (иначе
-            # серия быстрых «стрелка→» вырождается в одно нажатие)
-            self._watts_pending = want
+            # правка пришла, пока хелпер ещё пишет прошлое значение:
+            # запоминаем и применяем последней (иначе серия быстрых нажатий
+            # вырождается в одно)
+            self._sys_pending = want
             return
-        self._apply_watts(want)
-
-    @work(exclusive=True, group="power-watts")
-    async def _apply_watts(self, want: int):
-        self._busy = True
-        # ползунок НЕ блокируем: он остаётся живым и копит _watts_pending
-        self._watts_pending = None
-        self._set_status(t("tui.pwr_watts_apply", n=want))
-        try:
-            if self._sys_target:
-                # цель по всей системе задана: CPU-потолок — лишь её часть
-                res = await asyncio.to_thread(
-                    power_core.cascade_set, int(self._sys_target), want)
-                self._cascade_steps = (res.get("steps") or
-                                       self._cascade_steps)
-            else:
-                res = await asyncio.to_thread(power_core.set_watt_limit,
-                                              want)
-        except Exception as e:                              # noqa: BLE001
-            vlog.log("warn", TOOL, f"watts failed: {e}")
-            st = await asyncio.to_thread(power_core.status)
-            self._watts_applied = int(round(float(
-                ((st.get("root") or {}).get("rapl_pl1_w")) or want)))
-            self._busy = False
-            self._sync(st, announce=t("tui.pwr_watts_fail", msg=str(e)[:80]),
-                       error=True)
-            self._rerun_pending()
-            return
-        st = res.get("status") or await asyncio.to_thread(power_core.status)
-        failed = res.get("failed") or []
-        self._watts_applied = int(round(float(
-            ((st.get("root") or {}).get("rapl_pl1_w")) or want)))
-        self._busy = False
-        if failed:
-            self._sync(st, announce=t("tui.pwr_watts_fail", msg=failed[0][:80]),
-                       error=True)
-        else:
-            self._sync(st, announce=t("tui.pwr_watts_ok",
-                                      n=self._watts_applied))
-        self._rerun_pending()
+        self._apply_cascade(want)
 
     @work(exclusive=True, group="power-cascade")
     async def _apply_cascade(self, target: int):
-        """Цель по всему ноутбуку: CPU + экран + радио + USB + фон."""
+        """Один ползунок: цель по всей системе → каскад + замер факта."""
         self._busy = True
-        cpu = int(self._watts_applied or 15)
+        self._sys_pending = None
         self._set_status(t("tui.pwr_sys_apply", t=target))
         try:
-            res = await asyncio.to_thread(power_core.cascade_set, target, cpu)
+            # без --cpu: бюджет CPU считает сам план от цели минус плата
+            res = await asyncio.to_thread(power_core.cascade_set, target, None)
         except Exception as e:                              # noqa: BLE001
             vlog.log("warn", TOOL, f"cascade failed: {e}")
             st = await asyncio.to_thread(power_core.status)
             self._busy = False
+            self._sys_applied = self._target(st)
             self._sync(st, announce=t("tui.pwr_watts_fail", msg=str(e)[:80]),
                        error=True)
+            self._rerun_pending()
             return
+
         self._cascade_steps = res.get("steps") or []
         self._sys_target = target
         try:
@@ -538,23 +479,82 @@ class PowerTab(Vertical):
             core.save_state(state)
         except OSError:
             pass
-        st = await asyncio.to_thread(power_core.status)
+        st = res.get("status") or await asyncio.to_thread(power_core.status)
+        # герцовка: панель на 144 Гц жрёт ватты, которых у низких целей нет
+        mon = st.get("monitor") or {}
+        try:
+            hz = float(mon.get("hz") or 0)
+        except (TypeError, ValueError):
+            hz = 0
+        if target <= 18 and hz > 60.5 and mon.get("name"):
+            if await asyncio.to_thread(power_core.set_refresh, mon, 60.0):
+                st = await asyncio.to_thread(power_core.status)
+        self._sys_applied = self._target(st)
         self._busy = False
         failed = res.get("failed") or []
+        meas = res.get("measure") or {}
         if failed:
             self._sync(st, announce=t("tui.pwr_watts_fail", msg=failed[0][:80]),
                        error=True)
+        elif meas.get("w") is None:
+            # замер невозможен (зарядка) — говорим об этом, а не «применено»
+            self._sync(st, announce=t("tui.pwr_sys_ok", t=target),
+                       warn=bool(meas.get("reason")))
+        elif meas.get("feasible"):
+            self._sync(st, announce=t("tui.pwr_sys_done", t=target,
+                                      f=_f1(meas["w"]),
+                                      c=_f1(meas.get("rapl_w") or 0),
+                                      p=_f1(meas.get("platform_w") or 0)))
         else:
-            self._sync(st, announce=t("tui.pwr_sys_ok", t=target))
+            self._sync(st, announce=t("tui.pwr_sys_short", t=target,
+                                      f=_f1(meas["w"]),
+                                      m=_f1(meas.get("min_w") or 0)), warn=True)
+        self._rerun_pending()
 
     def _rerun_pending(self) -> None:
-        """Догоняем значение, которое пользователь выставил, пока шла запись."""
-        want = self._watts_pending
-        self._watts_pending = None
-        if want is not None and want != self._watts_applied:
-            self._apply_watts(want)
+        """Догоняем значение, которое выставили, пока шла запись."""
+        want = self._sys_pending
+        self._sys_pending = None
+        if want is not None and want != self._sys_applied:
+            self._apply_cascade(want)
 
     # --- отрисовка ----------------------------------------------------------
+
+    def _render_live(self, st: dict) -> None:
+        """Нижняя строка: цель vs ФАКТ (суммарные ватты от батареи).
+
+        Это главный ответ на «ползунок говорит 7, а ноут жрёт 12»: цифра
+        берётся из fuel-gauge (сглаженный power_now), рядом — сколько из
+        неё уходит в CPU (RAPL) и сколько остаётся на плату/экран/радио.
+        """
+        try:
+            widget = self.query_one("#p-live-text", Static)
+        except Exception:                                     # noqa: BLE001
+            return
+        if not st:
+            widget.update(Text(t("tui.pwr_wait"), style="#7a7a7a"))
+            return
+        cpu, plat = st.get("cpu_w"), st.get("platform_w")
+        c = _f1(cpu) if cpu else "—"
+        p = _f1(plat) if plat else "—"
+        if st.get("on_ac"):
+            widget.update(Text(t("tui.pwr_live_ac", c=c), style="#8a8a8a"))
+            return
+        fact = st.get("total_w")
+        f = _f1(fact) if fact else "—"
+        target = st.get("target")
+        if target:
+            text = t("tui.pwr_live", t=target, f=f, c=c, p=p)
+        else:
+            text = t("tui.pwr_live_off", f=f, c=c, p=p)
+        try:
+            gap = float(fact) - float(target)
+        except (TypeError, ValueError):
+            gap = None
+        color = ("#7ee787" if gap is not None and gap <= 1.0
+                 else "#ffd766" if gap is not None and gap <= 3.0
+                 else "#ff6b6b" if gap is not None else "#e8e8e8")
+        widget.update(Text(text, style=color))
 
     def _render_lines(self, st: dict) -> None:
         widget = self.query_one("#p-lines", Static)

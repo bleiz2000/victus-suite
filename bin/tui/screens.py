@@ -330,7 +330,20 @@ class VictusApp(App):
     }
     #pwr-watts-hint {
         color: #9a9a9a;
+        height: auto;
+    }
+    #p-live {
+        width: 100%;
         height: 1;
+        align: center middle;
+        background: #0d1117;
+        border-top: solid #2a2a2a;
+    }
+    #p-live-text {
+        width: 100%;
+        height: 1;
+        text-align: center;
+        color: #e8e8e8;
     }
     #p-readouts {
         width: 100%;

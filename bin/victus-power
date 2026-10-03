@@ -11,9 +11,13 @@
     victus-power mux <hybrid|discrete>  явное переключение MUX (нужен reboot)
     victus-power watts <5..25>          потолок мощности CPU (режим включён)
     victus-power draw [--dur S]         живая мощность пакета CPU из RAPL
-    victus-power cascade <5..25> [--cpu N]  каскад на цель по ВСЕМУ ноутбуку
+    victus-power cascade <5..25> [--cpu N] [--no-stabilize]
+                                        каскад на цель по ВСЕМУ ноутбуку:
+                                        один ползунок = потолок всей системы,
+                                        замер факта и подтяжка плана к цели
     victus-power cascade-off            снять каскад (яркость/BT/USB/фон)
     victus-power brightness <3..100>    яркость матрицы в процентах
+    victus-power measure [--dur S]      честный замер потребления батареи
 
 Снимок прошлого состояния: /var/lib/victus-suite/power-state.json
 Всё, что не поддерживается прошивкой/драйвером, пропускается с пометкой —
@@ -74,6 +78,66 @@ NVIDIA_PL_MIN_W = 20
 # внешние утилиты: только фиксированные argv, без shell
 IW = "/usr/bin/iw"
 RFKILL = "/usr/bin/rfkill"
+
+# --- честная модель расходов (замеры 03.10 на этом железе, батарея) ---------
+# План = CPU (RAPL) + «плата» (экран, SoC вне ядра, радио, накопитель, VRM).
+# Замерено от батареи окнами по 40 с: при 3% яркости плата ≈ 5.8–6.7 Вт,
+# при 100% ≈ 9.9 Вт — то есть одна только подсветка матрицы даёт +3.6 Вт.
+# Ползунок раньше двигал ТОЛЬКО CPU — поэтому «5 Вт» на экране означало
+# «CPU ≤ 5 Вт», а ноут тянул 11–13 Вт. Теперь цель считается по всей системе.
+# Оговорка: константы ниже — только ПЕРВЫЙ ШАГ плана. Дальше _stabilize
+# замеряет живую плату (факт − RAPL) и считает по ней, поэтому ошибка
+# модели не доходит до пользователя — до него доходит только измеренное.
+PLATFORM_BASE_W = 5.4        # плата без CPU, Вт (серия 2026-10-03: 4.9–6.1)
+BRIGHT_COST_W = 0.045        # Вт за 1% яркости (замер: 3%→65% = +3.6 Вт)
+CPU_MIN_W = 3                # минимальный бюджет CPU: ниже машина вязнет
+
+
+def platform_estimate(bright: int) -> float:
+    """Ожидаемая плата (без CPU) при заданной яркости матрицы."""
+    try:
+        b = max(0, min(100, int(bright)))
+    except (TypeError, ValueError):
+        b = 8
+    return round(PLATFORM_BASE_W + BRIGHT_COST_W * b, 2)
+
+
+def kbd_bin() -> str:
+    """victus-kbd лежит рядом с этим скриптом (install.sh кладёт оба в один
+    каталог), с откатом на PATH."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    cand = os.path.join(here, "victus-kbd")
+    if os.path.exists(cand):
+        return cand
+    return "/home/bl/.local/bin/victus-kbd"
+
+
+def kbd_state() -> bool | None:
+    """power=on|off из `victus-kbd power` (без аргумента — печать состояния)."""
+    try:
+        proc = subprocess.run([kbd_bin(), "power"], capture_output=True,
+                              text=True, timeout=6, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = "%s%s" % (proc.stdout or "", proc.stderr or "")
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("power="):
+            return line.split("=", 1)[1].strip().lower() == "on"
+    return None
+
+
+def kbd_set(on: bool) -> str | None:
+    """Включить/выключить подсветку клавиатуры. None = ок, иначе текст ошибки."""
+    try:
+        proc = subprocess.run([kbd_bin(), "power", "on" if on else "off"],
+                              capture_output=True, text=True, timeout=8,
+                              check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return str(exc)
+    if proc.returncode != 0:
+        return (proc.stderr or proc.stdout or "victus-kbd").strip()[:120]
+    return None
 
 
 def read(path: str):
@@ -600,8 +664,12 @@ def draw(dur: float = 1.2) -> dict:
 
 
 def set_watts(watt) -> dict:
-    """Потолок мощности 5..25 Вт на всю систему — только при включённой
-    «печатной машинке» (проверка и здесь, а не только в UI)."""
+    """Потолок мощности 3..25 Вт на пакет CPU — только при включённой
+    «печатной машинке» (проверка и здесь, а не только в UI).
+
+    3 Вт — дно для каскада на цель 5–6 Вт: платы и так уходит ~5.5 Вт,
+    поэтому бюджет CPU там должен быть минимальным, а не «как обычно 5».
+    """
     res = {"mode": "watts", "applied": [], "skipped": [], "failed": [],
            "restorable": False}
     try:
@@ -609,8 +677,8 @@ def set_watts(watt) -> dict:
     except (TypeError, ValueError):
         res["failed"].append("watts: не число %r" % (watt,))
         return res
-    if not 5 <= w <= 25:
-        res["failed"].append("watts: %d вне диапазона 5..25" % w)
+    if not 3 <= w <= 25:
+        res["failed"].append("watts: %d вне диапазона 3..25" % w)
         return res
 
     knobs = {
@@ -854,37 +922,151 @@ def _cascade_write(data: dict) -> None:
 
 
 def cascade_plan(target, cpu=None) -> dict:
-    """План каскада на цель T Вт для ВСЕГО ноутбука.
+    """План каскада: цель T Вт — на ВЕСЬ ноутбук, а не только на CPU.
 
-    Пол непроцессорных расходов (экран+SoC+радио+плата) измерен 03.10:
-    ~6 Вт в тихих режимах, ~8 Вт в щедрых. Всё, что осталось, отдаём CPU.
-    Шаги включаются каскадом: чем ниже цель, тем агрессивнее меры.
+    Модель (замеры 03.10 на этом железе, окна по 40 с от батареи, RAPL
+    считался отдельно): плата = 5.5 Вт на 0% яркости + 0.045 Вт за каждый
+    процент подсветки. Раньше ползунок двигал только CPU, поэтому «5 Вт»
+    на экране означало «CPU ≤ 5 Вт», а ноут тял 11–13 Вт (CPU ~5 + плата ~6).
+
+    Теперь: у платы забираем её долю (ярус по яркости), остаток идёт CPU
+    и никогда не опускается ниже CPU_MIN_W. Цели ниже физического минимума
+    отмечаются как недостижимые — честно, а не «5 Вт» на экране.
     """
     t = int(target)
     if not 5 <= t <= 25:
         raise ValueError("цель %d вне диапазона 5..25" % t)
-    overhead = 6 if t <= 12 else (7 if t <= 17 else 8)
-    ceiling = max(5, min(25, t - overhead))
-    if cpu is not None:
-        ceiling = min(ceiling, max(5, min(25, int(cpu))))
-    if t <= 8:
-        plan = {"bright": 8, "freq": 1_000_000, "bt": True, "wifi": True,
-                "usb": 2000, "slow": True}
-    elif t <= 12:
-        plan = {"bright": 15, "freq": 1_300_000, "bt": True, "wifi": True,
-                "usb": 2000, "slow": True}
+
+    # ярус каскада: чем ниже цель, тем злее гасим
+    if t <= 6:
+        tier = {"bright": 3, "bt": True, "usb": 2000, "slow": True,
+                "kbd": False}
+    elif t <= 8:
+        tier = {"bright": 5, "bt": True, "usb": 2000, "slow": True,
+                "kbd": False}
+    elif t <= 10:
+        tier = {"bright": 8, "bt": True, "usb": 2000, "slow": True,
+                "kbd": False}
+    elif t <= 13:
+        tier = {"bright": 12, "bt": True, "usb": 2000, "slow": True,
+                "kbd": False}
     elif t <= 17:
-        plan = {"bright": 30, "freq": 1_700_000, "bt": True, "wifi": True,
-                "usb": 2000, "slow": False}
+        tier = {"bright": 20, "bt": True, "usb": 2000, "slow": False,
+                "kbd": True}
+    elif t <= 20:
+        tier = {"bright": 35, "bt": False, "usb": None, "slow": False,
+                "kbd": True}
     else:
-        plan = {"bright": 55, "freq": None, "bt": False, "wifi": True,
-                "usb": None, "slow": False}
-    plan.update(target=t, cpu=ceiling, steps=[])
+        tier = {"bright": 55, "bt": False, "usb": None, "slow": False,
+                "kbd": True}
+
+    overhead = platform_estimate(tier["bright"])
+    # целое: set_watts/pl1 ждут ватты-целые, а `_cap_freq_w` строит по ним
+    # частоту — дробные 4.24 Вт сюда попадать не должны
+    ceiling = int(max(CPU_MIN_W, min(25, round(t - overhead))))
+    if cpu is not None:
+        # --cpu: ручной жёсткий потолок (не ниже CPU_MIN_W, чтобы TUI не вяз)
+        ceiling = max(CPU_MIN_W, min(25, int(cpu)))
+
+    plan = dict(tier)
+    plan.update(
+        target=t,
+        cpu=ceiling,
+        freq=_cap_freq_w(ceiling),
+        wifi=True,                       # только power-save, сеть не рвём
+        overhead=overhead,               # ожидаемая плата при этой яркости
+        expect_w=round(ceiling + overhead, 1),   # ожидаемый итог при загрузке
+        min_w=round(CPU_MIN_W + overhead, 1),    # физический минимум плана
+        feasible=bool(t >= CPU_MIN_W + overhead - 0.5),
+        steps=[],
+    )
     return plan
 
 
-def cascade_apply(target, cpu=None) -> dict:
-    """Каскад на цель T Вт: CPU-потолок + экран + радио + USB + фон."""
+def measure_total(dur: float = 8.0) -> dict:
+    """Честный замер потребления ВСЕЙ системы от батареи.
+
+    Источник — падение `energy_now` за окно (µWh → Вт): это единственный
+    сигнал, который видит и экран, и плату, и CPU, и радио. `power_now`
+    берём только как перекрёстную проверку — он ступенчатый и отстаёт.
+    На зарядке измерять нечего: `power_now` показывает ток зарядки, а не
+    расход, поэтому честно отказываемся, а не врём цифрой.
+    """
+    dur = max(3.0, min(60.0, float(dur or 8.0)))
+    bat = (sorted(glob.glob("/sys/class/power_supply/BAT*")) or [None])[0]
+    if not bat:
+        return {"ok": False, "reason": "нет батареи"}
+    status = (read(os.path.join(bat, "status")) or "").strip()
+    if "discharg" not in status.lower():
+        return {"ok": False, "reason": "зарядка — расход не меряется",
+                "status": status}
+
+    def _num(path):
+        try:
+            return float(str(read(path) or "").split()[0])
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    e0 = _num(os.path.join(bat, "energy_now"))
+    p0 = _num(os.path.join(bat, "power_now"))
+    t0 = time.monotonic()
+    samples = []
+    while time.monotonic() - t0 < dur:
+        p = _num(os.path.join(bat, "power_now"))
+        if p:
+            samples.append(p)
+        time.sleep(1.0)
+    e1 = _num(os.path.join(bat, "energy_now"))
+    dt = time.monotonic() - t0
+
+    out = {"ok": False, "dur": round(dt, 1), "status": status,
+           "at": round(time.time(), 1)}
+    energy_w = pnow_w = None
+    if e0 is not None and e1 is not None and e0 > e1 and dt > 0:
+        # µWh за окно → Вт:  W = dE_µWh * 3600 / (1e6 * dt_с)
+        energy_w = round((e0 - e1) * 3600.0 / (1e6 * dt), 2)
+        out["delta_uwh"] = round(e0 - e1, 1)
+    if samples:
+        pnow_w = round(sum(samples) / len(samples) / 1e6, 2)
+        out["pnow_avg"] = pnow_w
+        out["pnow_min"] = round(min(samples) / 1e6, 2)
+    if p0:
+        out["pnow0"] = round(p0 / 1e6, 2)
+    # ВАЖНО: шкала energy_now шагает по 10 мWh — на окне 30 с это шаг
+    # 1.2 Вт (мы одно время «мерили» 4.5 Вт там, где ноут тянет 9, и из-за
+    # этого цели ложно «не брались»). Среднее power_now за то же окно в
+    # четырёх перекрёстных замерах совпало с последующим 40-секундным
+    # окном лучше, чем интеграл (10.6 vs 10.8 / 10.0 vs 10.8 / 8.9 vs 7.2
+    # / 8.6 vs 9.6), поэтому:
+    #   окно ≥60 с  → энергия (интеграл, погрешность <0.5 Вт);
+    #   короче      → среднее power_now, энергия остаётся сверкой.
+    if energy_w is not None and dt >= 60.0:
+        out["w"], out["method"] = energy_w, "energy"
+    elif pnow_w is not None:
+        out["w"], out["method"] = pnow_w, "power_now"
+    elif energy_w is not None:
+        out["w"], out["method"] = energy_w, "energy-short"
+    if out.get("w") is not None:
+        out["ok"] = True
+    out["w_energy"], out["w_pnow"] = energy_w, pnow_w
+    if energy_w is not None and pnow_w is not None and \
+            abs(energy_w - pnow_w) > 1.5:
+        out["note"] = ("энергия %.1f Вт за %.0f с, power_now %.1f Вт — "
+                       "шкала датчика, не расхождение системы"
+                       % (energy_w, dt, pnow_w))
+    if not out.get("ok"):
+        out["reason"] = out.get("reason") or "энергия не падала (зарядка?)"
+    return out
+
+
+def cascade_apply(target, cpu=None, stabilize: bool = True,
+                  dur: float = 30.0) -> dict:
+    """Каскад на цель T Вт: CPU-потолок + экран + радио + USB + подсветка.
+
+    После применения система ЗАМЕРЯЕТСЯ от батареи и, если факт выше цели
+    больше чем на ватт, бюджет CPU стягивается вниз (до CPU_MIN_W) и замер
+    повторяется. Итог кладётся в res["measure"]: цель, факт, плата — честно.
+    """
     res = {"mode": "cascade", "applied": [], "skipped": [], "failed": [],
            "steps": [], "plan": None, "restorable": False}
     try:
@@ -951,7 +1133,27 @@ def cascade_apply(target, cpu=None) -> dict:
         else:
             res["skipped"].append("wifi: %s" % (err or "iw"))
 
-    # --- 4. USB ------------------------------------------------------------
+    # --- 4. подсветка клавиатуры корпуса -----------------------------------
+    # До этого её гасили только руками: EC держал 100% яркости и жрал
+    # ватты даже на цели 5 Вт. Состояние до каскада запоминаем один раз.
+    was_kbd = prev.get("kbd_power")
+    if was_kbd is None:
+        was_kbd = kbd_state()
+        prev["kbd_power"] = was_kbd
+    if not plan["kbd"]:
+        if was_kbd:
+            err = kbd_set(False)
+            if err:
+                res["skipped"].append("подсветка клавиатуры: %s" % err)
+            else:
+                res["applied"].append("подсветка клавиатуры выкл")
+                res["steps"].append({"key": "kbd"})
+    elif was_kbd:
+        err = kbd_set(True)               # более мягкий ярус — возвращаем свет
+        if not err:
+            res["steps"].append({"key": "kbd_on"})
+
+    # --- 5. USB ------------------------------------------------------------
     if not plan["usb"] and prev.get("usb"):
         res["applied"] += _usb_restore(prev["usb"])
         prev["usb"] = None
@@ -963,20 +1165,113 @@ def cascade_apply(target, cpu=None) -> dict:
         if lines:
             res["steps"].append({"key": "usb"})
 
-    # --- 5. фон: свои же опросы --------------------------------------------
+    # --- 6. фон: свои же опросы --------------------------------------------
     if plan["slow"]:
         res["steps"].append({"key": "slow"})
 
     res["steps"].append({"key": "dgpu"})
     prev.update(plan=plan, cpu=plan["cpu"], target=plan["target"],
                 slow=bool(plan["slow"]))
+    if stabilize:
+        res["measure"] = _stabilize(res, prev, plan, dur)
     _cascade_write(prev)
     res["restorable"] = True
     return res
 
 
+def _stabilize(res: dict, prev: dict, plan: dict, dur: float) -> dict:
+    """Замер факта от батареи и подтяжка CPU к цели.
+
+    Ползунок обещает число ВСЕЙ системы — значит после применения мы обязаны
+    измерить, сколько ноут тянет на самом деле, и стянуть бюджет CPU, пока
+    факт выше цели больше чем на ватт.
+
+    Порядок важен:
+      1. спим 4 с: сразу после записи (яркость, rfkill, usb, PL1) система
+         вспыхивает, и окно ловит 13 Вт вместо настоящих 9 — раньше из-за
+         этого цели «не брались» и в отчёт уходил вымысел;
+      2. меряем факт и ЦИФРАМИ ЖЕЛЕЗА вычисляем живую плату (факт − RAPL);
+         по ней пересчитываем минимум плана и бюджет CPU — модель больше
+         не врёт, её корректирует сам замер;
+      3. ужимаем CPU не дальше CPU_MIN_W, максимум 2 шага за вызов;
+      4. цель ниже физического минимума — честно (feasible=False + min_w),
+         а не красивая ложь.
+    """
+    time.sleep(4.0)                      # дать системе успокоиться
+    meas = measure_total(dur)
+    if not meas.get("ok"):
+        # причина (зарядка / нет батареи) печатается в emit — второй раз
+        # дублировать её в skipped не надо
+        meas.update(target=plan["target"], cpu=plan["cpu"],
+                    expect_w=plan["expect_w"], min_w=plan["min_w"],
+                    feasible=plan["feasible"], trimmed=0)
+        return meas
+
+    trimmed = 0
+    for _pass in range(3):
+        target = plan["target"]
+        w = meas.get("w")
+        rapl = draw(1.0).get("cpu_w")
+
+        # живая плата = факт − CPU: единственный честный ориентир
+        platform = None
+        if w is not None and rapl is not None:
+            platform = max(0.0, w - rapl)
+            plan["overhead"] = round(platform, 2)
+            plan["min_w"] = round(platform + CPU_MIN_W, 1)
+            plan["feasible"] = bool(target >= plan["min_w"] - 1.0)
+
+        if w is None or w <= target + 1.0:
+            break                         # цель взята — ужимать нечего
+        if plan["cpu"] <= CPU_MIN_W:
+            break                         # минимум уже, плата не даёт
+
+        want = max(CPU_MIN_W, int(target - (platform or plan["overhead"])))
+        new_cpu = max(CPU_MIN_W, min(plan["cpu"] - 1, want))
+        if new_cpu >= plan["cpu"]:
+            break                         # шага вниз не осталось
+        plan["cpu"] = new_cpu
+        plan["freq"] = _cap_freq_w(new_cpu)
+        plan["expect_w"] = round(new_cpu + plan["overhead"], 1)
+        wres = set_watts(new_cpu)
+        res["failed"] += wres.get("failed", [])
+        res["applied"] += wres.get("applied", [])
+        res["steps"] = [s if s.get("key") != "cpu" else
+                        {"key": "cpu", "cpu": new_cpu,
+                         "freq": plan["freq"]} for s in res["steps"]]
+        trimmed += 1
+        time.sleep(4.0)                   # дать ЭС догнать
+        meas = measure_total(dur)
+        if not meas.get("ok"):
+            break
+
+    d = draw(1.0)
+    if d.get("cpu_w") is not None:
+        meas["rapl_w"] = d["cpu_w"]
+        if meas.get("w") is not None:
+            meas["platform_w"] = round(meas["w"] - d["cpu_w"], 2)
+    # допуск на «цель взята» — 0.7 Вт: шире, и 9.0 Вт при цели 8 Вт
+    # называется успехом, а это ровно та ложь, с которой мы и боремся
+    tol = 0.7
+    meas.update(target=plan["target"], cpu=plan["cpu"],
+                expect_w=plan["expect_w"], min_w=plan["min_w"],
+                feasible=bool(plan["feasible"] and
+                              meas.get("w", 1e9) <= plan["target"] + tol),
+                trimmed=trimmed, slow=bool(plan["slow"]))
+    if meas.get("w") is not None:
+        if meas["w"] <= plan["target"] + tol:
+            res["applied"].append("факт %.1f Вт — цель %.0f Вт взята"
+                                  % (meas["w"], plan["target"]))
+        else:
+            res["skipped"].append(
+                "факт %.1f Вт при цели %.0f Вт (минимум %.1f Вт, CPU %.0f Вт)"
+                % (meas["w"], plan["target"], plan["min_w"], plan["cpu"]))
+    prev["measure"] = meas
+    return meas
+
+
 def cascade_off() -> dict:
-    """Снять каскад: вернуть яркость, Bluetooth, USB, фон."""
+    """Снять каскад: вернуть яркость, подсветку клавиатуры, BT, USB, фон."""
     res = {"mode": "cascade-off", "applied": [], "skipped": [], "failed": []}
     prev = _cascade_read()
     if not prev:
@@ -986,6 +1281,10 @@ def cascade_off() -> dict:
         b = brightness(prev["brightness"])
         res["applied"] += b.get("applied", [])
         res["failed"] += b.get("failed", [])
+    if prev.get("kbd_power"):
+        err = kbd_set(True)               # свет клавиатуры, как и был
+        (res["failed"] if err else res["applied"]).append(
+            "подсветка клавиатуры вкл" if not err else "подсветка: %s" % err)
     if prev.get("bt_blocked"):
         ok, err = _rfkill(False)
         (res["applied"] if ok else res["failed"]).append(
@@ -1166,6 +1465,14 @@ def status(with_nvidia: bool = False) -> dict:
         st["nvidia_temp"] = None
         st["nvidia_quiet"] = True
     st["typewriter_saved"] = load_snapshot() is not None
+    # --- каскад: цель, план и последний замер факта -----------------------
+    cas = _cascade_read() or {}
+    st["cascade_target"] = cas.get("target")
+    st["cascade_cpu"] = cas.get("cpu")
+    st["cascade_plan"] = cas.get("plan")
+    st["cascade_measure"] = cas.get("measure")
+    st["brightness_pct"] = brightness().get("pct")
+    st["usb_autosuspend"] = read("/sys/module/usbcore/parameters/autosuspend")
     return st
 
 
@@ -1194,6 +1501,16 @@ def emit(res: dict, as_json: bool) -> int:
                 print(" %s %s" % (mark, line))
         if res.get("reboot_required"):
             print(" ! требуется перезагрузка")
+        m = res.get("measure") or {}
+        if m.get("w") is not None:
+            mark = "OK" if m.get("feasible") else "!"
+            print(" %s факт %.1f Вт из цели %s · CPU %s · плата %s · "
+                  "минимум плана %.1f Вт" % (
+                      mark, m["w"], m.get("target", "-"),
+                      m.get("rapl_w", "-"), m.get("platform_w", "-"),
+                      m.get("min_w") or 0.0))
+        elif m:
+            print(" - замер: %s" % (m.get("reason") or "нет данных"))
         print("%s: %s" % (res.get("mode", "ok"),
                           "ошибок=%d" % len(res.get("failed") or [])))
     return 1 if res.get("failed") else 0
@@ -1220,14 +1537,21 @@ def main(argv=None) -> int:
     p_mux = sub.add_parser("mux", parents=[common])
     p_mux.add_argument("mode", choices=["hybrid", "discrete"])
     p_watts = sub.add_parser("watts", parents=[common])
-    p_watts.add_argument("watt", type=int, help="потолок мощности CPU 5..25 Вт")
+    p_watts.add_argument("watt", type=int, help="потолок мощности CPU 3..25 Вт")
     p_draw = sub.add_parser("draw", parents=[common])
     p_draw.add_argument("--dur", type=float, default=1.2,
                         help="интервал измерения, с (0.3..5)")
+    p_meas = sub.add_parser("measure", parents=[common])
+    p_meas.add_argument("--dur", type=float, default=40.0,
+                        help="окно замера, с (3..60)")
     p_cas = sub.add_parser("cascade", parents=[common])
     p_cas.add_argument("target", type=int, help="цель по всей системе 5..25 Вт")
     p_cas.add_argument("--cpu", type=int, default=None,
-                       help="ручной потолок CPU 5..25 Вт")
+                       help="ручной потолок CPU 3..25 Вт")
+    p_cas.add_argument("--dur", type=float, default=30.0,
+                       help="окно замера факта, с (3..60)")
+    p_cas.add_argument("--no-stabilize", action="store_true",
+                       help="не замерять и не подтягивать план к цели")
     sub.add_parser("cascade-off", parents=[common])
     p_br = sub.add_parser("brightness", parents=[common])
     p_br.add_argument("pct", type=int, nargs="?", default=None,
@@ -1258,7 +1582,20 @@ def main(argv=None) -> int:
     if a.cmd == "watts":
         return emit(set_watts(a.watt), a.json)
     if a.cmd == "cascade":
-        return emit(cascade_apply(a.target, a.cpu), a.json)
+        return emit(cascade_apply(a.target, a.cpu,
+                                  stabilize=not a.no_stabilize, dur=a.dur),
+                    a.json)
+    if a.cmd == "measure":
+        res = measure_total(a.dur)
+        if a.json:
+            print(json.dumps(res, ensure_ascii=False))
+        elif res.get("ok"):
+            print("факт %.2f Вт (окно %.0f с, %s) · power_now %.2f Вт"
+                  % (res["w"], res.get("dur", 0), res.get("status", "-"),
+                     res.get("pnow_avg") or res.get("pnow0") or 0.0))
+        else:
+            print("! замер невозможен: %s" % res.get("reason"))
+        return 0 if res.get("ok") else 1
     if a.cmd == "cascade-off":
         return emit(cascade_off(), a.json)
     if a.cmd == "brightness":

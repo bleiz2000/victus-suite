@@ -94,7 +94,7 @@ Remove with `./install.sh --remove` (symlinks, menu entry and icons).
 | `victus-kbd get` / `dump [start] [len]` | current RGB / EC dump | yes |
 | `victus-kbd power on\|off\|toggle` | backlight on/off — writes EC **and** `state/last_state.json` (the tab follows it) | yes |
 | `victus-kbd fans status\|set-pwm A B\|set-mode 0\|1\|2\|hold N` | vertil fans (hwmon PWM) | via the rule above |
-| `victus-power status\|snapshot\|apply\|restore\|watts N\|cascade N\|cascade-off\|brightness N\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **whole-laptop cascade (screen/radio/USB)**, **live CPU draw (RAPL)** | via the NOPASSWD rule |
+| `victus-power status\|snapshot\|apply\|restore\|watts N\|cascade N\|cascade-off\|brightness N\|measure\|draw` | power modes: rollback point, Typewriter, 5–25 W system cap, **whole-laptop cascade (screen/radio/USB) with a 30 s post-apply measurement**, **honest draw over a 40 s window**, **live CPU draw (RAPL)** | via the NOPASSWD rule |
 | `ColorMaker list\|add\|rm\|palette` | named colors (english only) | no |
 | `Changer <name\|R G B\|#RRGGBB\|random\|off>` | apply color | asks sudo |
 | `Changer cycle-red` | **bright red loop** (red/fire/scarlet/darkred) | asks sudo |
@@ -331,30 +331,49 @@ on average. The tab toggles a system-wide, fully reversible cap.
 `sudo victus-power watts N` applies the same plan from the CLI (refuses with
 rc=1 while the mode is off).
 
-### Whole-laptop cascade (second slider)
+### One slider for the whole laptop (cascade 5–25 W)
 
-Throttling the CPU alone cannot hit the target: the measured non-CPU floor
-(screen, SoC, radio, board) is **~6 W quiet / ~8 W generous**, and brightness
-alone spans **+4.8 W** between 5 % and 100 %. The **Whole-laptop cap** slider
-therefore plans the whole machine (see `vertil/docs/2026-10-03-power-floor-report.md`):
+Throttling the CPU alone cannot hit a watt target: the measured non-CPU floor
+(screen, SoC, radio, board) is **~4.5–7 W** depending on load, and brightness
+alone spans **+3.6 W** between 3 % and 65 %. So the **single** watt slider on
+the Power tab plans the *whole machine*, applies the plan, and then — this is
+the part that matters — **measures what the laptop actually draws** and says so
+out loud (report: `vertil/docs/2026-10-03-power-floor-report.md`):
 
 | Target | Plan on top of the CPU cap |
 |---|---|
-| 18–25 W | brightness 55 %, Wi-Fi power-save |
-| 13–17 W | + brightness 30 %, freq ceiling 1.7 GHz, USB autosuspend (2 s) |
-| 9–12 W | + brightness 15 %, Bluetooth off, background polling slowed |
-| 5–8 W | + brightness 8 %, freq ceiling 1.0 GHz |
+| 18–25 W | brightness 35–55 %, Wi-Fi power-save |
+| 13–17 W | + brightness 20 %, freq ceiling 1.7 GHz, USB autosuspend (2 s) |
+| 9–13 W | + brightness 8–12 %, Bluetooth off, background polling slowed |
+| 5–8 W | + brightness 3–5 %, freq ceiling ≤ 1.0 GHz, keyboard backlight off |
 
-Every step the cascade performed is shown as a hint under the slider
-(`CPU ≤ 1.3 GHz · screen 60 Hz · brightness 15 % · Bluetooth off …`) plus the
-expected battery range. The CPU slider keeps working on its own; brightness,
-Bluetooth and USB are snapshotted first and restored by
+What happens when you move the slider:
+
+1. the cascade is written (PL1/PL2, perf cap, frequency ceiling, brightness,
+   radio, USB, dGPU parked) and the panel is forced to **60 Hz**;
+2. the helper **waits 4 s and measures for 30 s from the battery**
+   (`energy_now` / `power_now`);
+3. if the measured total is above the target, the CPU budget is trimmed and
+   the measurement is repeated (floor: 3 W on the package);
+4. the verdict is reported as a number: `Target 10 W → actual 12.2 W · CPU 4 ·
+   platform 8`, or `Target 10 W not reached: actual 12.2 W, plan floor 11.5 W`.
+
+The bottom line of the tab renders the same numbers **live** (target vs actual
+vs CPU vs platform, colour-coded; on AC it says the draw is not measurable),
+and the hint under the slider repeats the last measured verdict plus the ETA —
+hint and status can never disagree, because both read the same measurement.
+
+Honest limits measured on this machine with a browser + editor running:
+the floor sits at **~9–11 W**, so targets ≥ 10–12 W are taken, and 5–8 W are
+reported as unreachable with the real floor — not silently "applied".
+Brightness, Bluetooth and USB are snapshotted first and restored by
 `sudo victus-power cascade-off` — switching the mode off does that too.
 
 ```bash
 sudo victus-power cascade 10        # whole-machine plan for 10 W
-sudo victus-power cascade 10 --cpu 7
-sudo victus-power cascade-off       # restore brightness / Bluetooth / USB
+sudo victus-power cascade 10 --cpu 7 --no-stabilize
+sudo victus-power measure --dur 40  # honest draw over a 40 s window
+sudo victus-power cascade-off        # restore brightness / Bluetooth / USB
 sudo victus-power brightness 45     # backlight in percent
 ```
 
