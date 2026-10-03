@@ -158,6 +158,28 @@ def _num(info: dict, key: str, scale: float):
 
 
 _ENERGY_CACHE: dict = {}
+_POWER_EMA: dict = {"w": None, "t": 0.0}
+
+
+def _smooth_power(w: float | None) -> float | None:
+    """Сглаженная мгновенная мощность: EMA по power_now.
+
+    Сырой power_now промежен и ступенчат (обновляется ~1 раз в секунду,
+    шаг ~0.55 Вт, отстаёт на 1–3 с) — в подсказке он выглядит «кривым».
+    Скользящее среднее с α=0.5 убирает ступеньки, но всё ещё реагирует
+    на ползунок за пару секунд.
+    """
+    if w is None:
+        return _POWER_EMA.get("w")
+    prev = _POWER_EMA.get("w")
+    now = time.monotonic()
+    # после паузы в опросе (спящий режим) старое значение не тянем
+    if prev is None or now - _POWER_EMA.get("t", 0.0) > 30:
+        val = w
+    else:
+        val = prev + 0.5 * (w - prev)
+    _POWER_EMA.update(w=round(val, 2), t=now)
+    return _POWER_EMA["w"]
 
 
 def _avg_watts(wh: float | None) -> float | None:
@@ -215,6 +237,7 @@ def battery() -> dict:
         if cur and vol:
             w = cur * vol                            # fallback: A × V
     info["watts"] = round(w, 1) if w else None
+    info["w_inst"] = _smooth_power(info["watts"])
     # ЭС показывает `power_now` с большой задержкой и ступенями (замерено:
     # 19.5 Вт → 25 Вт уже ПОСЛЕ снятия нагрузки). Поэтому рядом держим
     # среднее по падению энергии — честное, но медленное.
@@ -223,10 +246,14 @@ def battery() -> dict:
     status = (info.get("status") or "").lower()
     hours = None
     if wh and w and w > 0:
-        if "discharg" in status:
-            hours = wh / w                           # сколько ещё хватит
-        elif "charg" in status and full:
-            hours = max(0.0, full - wh) / w          # сколько до полного
+        # оценку держим на худшем из двух: сырые ступени ЭС врём вниз,
+        # длинное среднее по энергии — вверх (память на прошлую нагрузку)
+        used = max(w, info.get("w_inst") or 0.0, info.get("avg_w") or 0.0)
+        if used > 0:
+            if "discharg" in status:
+                hours = wh / used                    # сколько ещё хватит
+            elif "charg" in status and full:
+                hours = max(0.0, full - wh) / used   # сколько до полного
     info["hours"] = round(hours, 2) if hours and hours > 0.02 else None
     return info
 
@@ -402,6 +429,27 @@ def set_watt_limit(watt: int) -> dict:
         res["failed"] = data.get("failed") or []
         res["skipped"] = data.get("skipped") or []
     return res
+
+
+def cascade_set(target: int, cpu: int | None = None) -> dict:
+    """Каскад на цель по ВСЕМУ ноутбуку (5..25 Вт) + ручной потолок CPU."""
+    argv = ["sudo", "-n", POWER, "cascade", str(int(target)), "--json"]
+    if cpu is not None:
+        argv.insert(-1, "--cpu")
+        argv.insert(-1, str(int(cpu)))
+    data, err = _json(argv, timeout=40.0)
+    if data is None:
+        return {"mode": "cascade", "applied": [], "failed": [err or "cascade"],
+                "steps": []}
+    return data
+
+
+def cascade_off() -> dict:
+    data, err = _json(["sudo", "-n", POWER, "cascade-off", "--json"],
+                      timeout=30.0)
+    if data is None:
+        return {"mode": "cascade-off", "applied": [], "failed": [err or "off"]}
+    return data
 
 
 def _fmt(hz) -> str:

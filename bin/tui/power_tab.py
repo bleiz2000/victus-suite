@@ -57,6 +57,15 @@ MODE_CLASSES = {
 }
 
 
+def _f1(value) -> str:
+    """Одна десятичная: 1.30 → «1.3», 4.0 → «4»."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return "%d" % v if abs(v - round(v)) < 0.05 else "%.1f" % v
+
+
 def _fmt_dur(hours) -> str:
     """3.22 → «3 ч 13 мин»; 0.4 → «24 мин»; 61 → «2 дн 13 ч»."""
     if hours is None or hours <= 0:
@@ -99,7 +108,8 @@ class WattsBar(Static):
         span = max(8, (self.size.width or 40) - 7)
         frac = (self.value - self.MIN) / (self.MAX - self.MIN)
         n = max(0, min(span, int(round(frac * span))))
-        return Text("%s %2d Вт" % ("█" * n + "░" * (span - n), self.value))
+        return Text("%s %2d %s" % ("█" * n + "░" * (span - n),
+                                          self.value, t("tui.unit_w")))
 
     def _set(self, want, notify: bool = True) -> None:
         want = max(self.MIN, min(self.MAX, int(want)))
@@ -148,6 +158,11 @@ class PowerTab(Vertical):
         self._watts_syncing = False
         self._watts_applied = 15
         self._watts_pending = None
+        # каскад на цель по всему ноутбуку (второй ползунок)
+        self._sys_target = state.get("power_target")
+        self._sys_applied = None
+        self._sys_syncing = False
+        self._cascade_steps = []
 
     # --- композиция ---------------------------------------------------------
 
@@ -167,6 +182,10 @@ class PowerTab(Vertical):
                         yield Static("", id="pwr-watts-cap")
                         yield WattsBar(id="pwr-watts")
                         yield Static(t("tui.pwr_watts_off"), id="pwr-watts-hint")
+                    with Vertical(classes="vblock", id="pwr-sys-block"):
+                        yield Static(t("tui.pwr_sys_lbl"), id="pwr-sys-cap")
+                        yield WattsBar(id="pwr-sys")
+                        yield Static(t("tui.pwr_sys_off"), id="pwr-sys-hint")
                 with Vertical(id="p-readouts"):
                     yield Static("", id="p-lines", classes="vblock")
         with Horizontal(id="pstatusline"):
@@ -375,12 +394,77 @@ class PowerTab(Vertical):
             finally:
                 self._watts_syncing = False
         sl.disabled = not on
+        self._sync_sys(st, mode)
+
+    def _sync_sys(self, st: dict, mode: str) -> None:
+        """Второй ползунок: цель по ВСЕМУ ноутбуку (каскад)."""
+        try:
+            sl = self.query_one("#pwr-sys", WattsBar)
+            hint = self.query_one("#pwr-sys-hint", Static)
+        except Exception:                                  # noqa: BLE001
+            return
+        on = mode in _LIVE_MODES and not self._mode_busy
+        target = self._sys_target
+        if on and target:
+            hint.update(Text(self._sys_hint_text(st)))
+        elif on:
+            hint.update(Text(t("tui.pwr_sys_off")))
+        else:
+            hint.update(Text(t("tui.pwr_watts_off")))
+        if target and abs(float(sl.value) - int(target)) > 0.5:
+            self._sys_syncing = True
+            try:
+                sl.value = int(target)
+                self._sys_applied = int(target)
+            finally:
+                self._sys_syncing = False
+        elif not target and self._sys_applied is None:
+            self._sys_applied = sl.value
+        sl.disabled = not on
+
+    def _sys_hint_text(self, st: dict) -> str:
+        """«Выбрано 10 Вт: CPU ≤1.3 ГГц · экран 60 Гц · яркость 15% …»."""
+        bat = st.get("battery") or {}
+        mon = st.get("monitor") or {}
+        try:
+            hz = int(float(mon.get("hz") or 60))
+        except (TypeError, ValueError):
+            hz = 60
+        parts = []
+        for step in self._cascade_steps or []:
+            key = step.get("key")
+            if key == "cpu":
+                parts.append(t("tui.cs_cpu",
+                               f=_f1((step.get("freq") or 0) / 1e6),
+                               p=step.get("cpu")))
+            elif key == "screen":
+                parts.append(t("tui.cs_screen", hz=hz, b=step.get("bright")))
+            elif key in ("bt", "wifi", "usb", "slow", "dgpu"):
+                parts.append(t("tui.cs_%s" % key))
+        if not parts:
+            return t("tui.pwr_sys_off")
+        hours = bat.get("hours")
+        tail = ""
+        if hours:
+            tail = " " + t("tui.pwr_sys_eta", h1=_f1(hours * 0.85),
+                           h2=_f1(hours * 1.05))
+        return t("tui.pwr_sys_hint", t=self._sys_target or "—",
+                 steps=" · ".join(parts)) + tail
 
     def on_watts_bar_changed(self, event: WattsBar.Changed):
         if self._busy or self._watts_syncing:
             return
         if (self._st or {}).get("mode") not in _LIVE_MODES:
             return                      # режим выключен — ползунок мёртв
+        if event.bar.id == "pwr-sys":
+            if self._sys_syncing:
+                return
+            want = int(event.value)
+            if want == (self._sys_applied if self._sys_applied is not None
+                        else -1):
+                return
+            self._apply_cascade(want)
+            return
         want = int(event.value)
         if want == self._watts_applied:
             return                      # это мы сами подтянули из железа
@@ -399,7 +483,15 @@ class PowerTab(Vertical):
         self._watts_pending = None
         self._set_status(t("tui.pwr_watts_apply", n=want))
         try:
-            res = await asyncio.to_thread(power_core.set_watt_limit, want)
+            if self._sys_target:
+                # цель по всей системе задана: CPU-потолок — лишь её часть
+                res = await asyncio.to_thread(
+                    power_core.cascade_set, int(self._sys_target), want)
+                self._cascade_steps = (res.get("steps") or
+                                       self._cascade_steps)
+            else:
+                res = await asyncio.to_thread(power_core.set_watt_limit,
+                                              want)
         except Exception as e:                              # noqa: BLE001
             vlog.log("warn", TOOL, f"watts failed: {e}")
             st = await asyncio.to_thread(power_core.status)
@@ -422,6 +514,38 @@ class PowerTab(Vertical):
             self._sync(st, announce=t("tui.pwr_watts_ok",
                                       n=self._watts_applied))
         self._rerun_pending()
+
+    @work(exclusive=True, group="power-cascade")
+    async def _apply_cascade(self, target: int):
+        """Цель по всему ноутбуку: CPU + экран + радио + USB + фон."""
+        self._busy = True
+        cpu = int(self._watts_applied or 15)
+        self._set_status(t("tui.pwr_sys_apply", t=target))
+        try:
+            res = await asyncio.to_thread(power_core.cascade_set, target, cpu)
+        except Exception as e:                              # noqa: BLE001
+            vlog.log("warn", TOOL, f"cascade failed: {e}")
+            st = await asyncio.to_thread(power_core.status)
+            self._busy = False
+            self._sync(st, announce=t("tui.pwr_watts_fail", msg=str(e)[:80]),
+                       error=True)
+            return
+        self._cascade_steps = res.get("steps") or []
+        self._sys_target = target
+        try:
+            state = core.load_state()
+            state["power_target"] = target
+            core.save_state(state)
+        except OSError:
+            pass
+        st = await asyncio.to_thread(power_core.status)
+        self._busy = False
+        failed = res.get("failed") or []
+        if failed:
+            self._sync(st, announce=t("tui.pwr_watts_fail", msg=failed[0][:80]),
+                       error=True)
+        else:
+            self._sync(st, announce=t("tui.pwr_sys_ok", t=target))
 
     def _rerun_pending(self) -> None:
         """Догоняем значение, которое пользователь выставил, пока шла запись."""

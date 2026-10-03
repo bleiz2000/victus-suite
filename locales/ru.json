@@ -166,5 +166,19 @@
   "tui.pwr_watts_ok5": " Цель 5 ч достигнута.",
   "tui.kbd_ext_on": "Подсветка включена с клавиатуры",
   "tui.kbd_ext_off": "Подсветка выключена с клавиатуры",
-  "tui.pwr_conflict": "системный профиль {p} спорит с печатной машинкой"
+  "tui.pwr_conflict": "системный профиль {p} спорит с печатной машинкой",
+  "tui.unit_w": "Вт",
+  "tui.pwr_sys_lbl": "Потолок всей системы (Вт)",
+  "tui.pwr_sys_off": "Каскад выключен — действует только потолок CPU.",
+  "tui.pwr_sys_apply": "Ставлю цель {t} Вт на всю систему…",
+  "tui.pwr_sys_ok": "Цель {t} Вт применена",
+  "tui.pwr_sys_hint": "Выбрано {t} Вт: {steps}.",
+  "tui.pwr_sys_eta": "Ожидаемо ~{h1}–{h2} ч.",
+  "tui.cs_cpu": "CPU ≤ {f} ГГц · PL1 {p} Вт",
+  "tui.cs_screen": "экран {hz} Гц · яркость {b}%",
+  "tui.cs_bt": "Bluetooth выкл.",
+  "tui.cs_wifi": "Wi-Fi power-save",
+  "tui.cs_usb": "USB autosuspend",
+  "tui.cs_slow": "фоновые опросы замедлены",
+  "tui.cs_dgpu": "дискретка спит"
 }

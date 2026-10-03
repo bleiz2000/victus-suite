@@ -549,8 +549,14 @@ class VertilTab(Vertical):
     def _mode_text(self, snap: dict) -> Text:
         mode = snap.get("mode_name") or "-"
         color = {"auto": "green", "manual": "yellow", "max": "red"}.get(mode, "dim")
-        ctrl = mode_name("smart") if self.autopilot else (
-            mode_name("manual") if mode == "manual" else mode.upper())
+        if self.autopilot:
+            ctrl = mode_name("smart")
+        elif mode == "manual":
+            ctrl = mode_name("manual")
+        elif mode == "auto":
+            ctrl = mode_name("auto")
+        else:
+            ctrl = mode.upper()
         out = Text()
         out.append_text(line(
             ("MODE ", "dim"), (mode, color),

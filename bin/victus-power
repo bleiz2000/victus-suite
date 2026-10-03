@@ -11,6 +11,9 @@
     victus-power mux <hybrid|discrete>  явное переключение MUX (нужен reboot)
     victus-power watts <5..25>          потолок мощности CPU (режим включён)
     victus-power draw [--dur S]         живая мощность пакета CPU из RAPL
+    victus-power cascade <5..25> [--cpu N]  каскад на цель по ВСЕМУ ноутбуку
+    victus-power cascade-off            снять каскад (яркость/BT/USB/фон)
+    victus-power brightness <3..100>    яркость матрицы в процентах
 
 Снимок прошлого состояния: /var/lib/victus-suite/power-state.json
 Всё, что не поддерживается прошивкой/драйвером, пропускается с пометкой —
@@ -29,6 +32,7 @@ import time
 TOOL = "victus-power"
 STATE_DIR = "/var/lib/victus-suite"
 STATE_FILE = os.path.join(STATE_DIR, "power-state.json")
+CASCADE_FILE = os.path.join(STATE_DIR, "cascade.json")   # каскад 5..25 Вт
 
 PLATFORM_PROFILE = "/sys/firmware/acpi/platform_profile"
 PSTATE_DIR = "/sys/devices/system/cpu/intel_pstate"
@@ -685,7 +689,322 @@ def set_watts(watt) -> dict:
     return res
 
 
+def _backlight_path():
+    hits = sorted(glob.glob("/sys/class/backlight/*/brightness"))
+    return hits[0] if hits else None
+
+
+def brightness(pct=None) -> dict:
+    """Яркость матрицы в процентах (без pct — только прочитать).
+
+    Нужна каскаду: на матрицу уходит 4–5 Вт, и без её регулировки
+    потолок «5 Вт на весь ноутбук» недостижим физически.
+    """
+    res = {"mode": "brightness", "applied": [], "failed": [], "skipped": []}
+    path = _backlight_path()
+    if not path:
+        res["failed"].append("яркость: нет /sys/class/backlight/*/brightness")
+        return res
+    mx = None
+    try:
+        mx = int(str(read(os.path.join(os.path.dirname(path),
+                                       "max_brightness")) or "").split()[0])
+    except (TypeError, ValueError, IndexError):
+        pass
+    if not mx:
+        res["failed"].append("яркость: не прочитан max_brightness")
+        return res
+    cur = read(path)
+    try:
+        res["pct"] = round(int(str(cur).split()[0]) * 100 / mx)
+    except (TypeError, ValueError, IndexError):
+        res["pct"] = None
+    if pct is None:
+        return res
+    try:
+        want_pct = int(pct)
+    except (TypeError, ValueError):
+        res["failed"].append("яркость: не число %r" % (pct,))
+        return res
+    want_pct = max(3, min(100, want_pct))
+    err = write(path, str(mx * want_pct // 100), attempts=4, delay=0.2)
+    if err:
+        res["failed"].append("яркость: %s" % err)
+        return res
+    res["applied"].append("яркость %d%%" % want_pct)
+    res["pct"] = want_pct
+    return res
+
+
+def _usb_save() -> dict:
+    """Снимок USB-экономии, чтобы cascade-off вернул как было."""
+    out = {"global": read("/sys/module/usbcore/parameters/autosuspend"),
+           "devs": {}}
+    for d in glob.glob("/sys/bus/usb/devices/*"):
+        if not os.path.exists(os.path.join(d, "idVendor")):
+            continue
+        try:
+            vid = str(read(os.path.join(d, "idVendor"))).strip()
+        except (TypeError, ValueError):
+            vid = ""
+        if vid == "1d6b":                       # корневые хабы не трогаем
+            continue
+        out["devs"][d] = {
+            "control": read(os.path.join(d, "power/control")),
+            "delay": read(os.path.join(d, "power/autosuspend_delay_ms")),
+        }
+    return out
+
+
+def _usb_apply(ms: int) -> list:
+    """USB autosuspend — та же логика, что у ppd-power-actions (не воюем)."""
+    steps, fail = [], []
+    write("/sys/module/usbcore/parameters/autosuspend", str(ms // 1000))
+    for d in glob.glob("/sys/bus/usb/devices/*"):
+        vid_path = os.path.join(d, "idVendor")
+        if not os.path.exists(vid_path):
+            continue
+        try:
+            vid = str(read(vid_path)).strip()
+        except (TypeError, ValueError):
+            continue
+        if vid == "1d6b":
+            continue
+        # BT-комбо держим живым (та же маска, что у ppd-power-actions)
+        try:
+            pid = str(read(os.path.join(d, "idProduct"))).strip()
+        except (TypeError, ValueError):
+            pid = ""
+        if "%s:%s" % (vid, pid) == "13d3:3567":
+            continue
+        if read(os.path.join(d, "power/control")) is None:
+            continue
+        if write(os.path.join(d, "power/control"), "auto") or write(
+                os.path.join(d, "power/autosuspend_delay_ms"), str(ms)):
+            fail.append(os.path.basename(d))
+        else:
+            steps.append(os.path.basename(d))
+    if not steps and not fail:
+        return []
+    return ["usb autosuspend %d мс (%d устр.)" % (ms, len(steps))]
+
+
+def _usb_restore(snap: dict) -> list:
+    out = []
+    if snap.get("global") is not None:
+        write("/sys/module/usbcore/parameters/autosuspend", str(snap["global"]))
+        out.append("usb global=%s" % snap["global"])
+    for d, vals in (snap.get("devs") or {}).items():
+        if vals.get("control"):
+            write(os.path.join(d, "power/control"), str(vals["control"]))
+        if vals.get("delay"):
+            write(os.path.join(d, "power/autosuspend_delay_ms"), str(vals["delay"]))
+    return out
+
+
+def _rfkill(block: bool) -> tuple:
+    act = "block" if block else "unblock"
+    try:
+        proc = subprocess.run(["rfkill", act, "bluetooth"],
+                              capture_output=True, text=True, timeout=6.0)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    return proc.returncode == 0, proc.stderr.strip()
+
+
+def _wifi_ps(on: bool) -> tuple:
+    iface = None
+    for name in ("/sys/class/net/wlo1", "/sys/class/net/wlan0"):
+        if os.path.exists(name):
+            iface = os.path.basename(name)
+            break
+    if not iface:
+        for line in glob.glob("/sys/class/net/*"):
+            if os.path.exists(os.path.join(line, "wireless")):
+                iface = os.path.basename(line)
+                break
+    if not iface:
+        return False, "нет wifi-интерфейса"
+    try:
+        proc = subprocess.run(["iw", "dev", iface, "set", "power_save",
+                               "on" if on else "off"],
+                              capture_output=True, text=True, timeout=6.0)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    return proc.returncode == 0, proc.stderr.strip()
+
+
+def _cascade_read() -> dict:
+    try:
+        with open(CASCADE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _cascade_write(data: dict) -> None:
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(CASCADE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+        os.chmod(CASCADE_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def cascade_plan(target, cpu=None) -> dict:
+    """План каскада на цель T Вт для ВСЕГО ноутбука.
+
+    Пол непроцессорных расходов (экран+SoC+радио+плата) измерен 03.10:
+    ~6 Вт в тихих режимах, ~8 Вт в щедрых. Всё, что осталось, отдаём CPU.
+    Шаги включаются каскадом: чем ниже цель, тем агрессивнее меры.
+    """
+    t = int(target)
+    if not 5 <= t <= 25:
+        raise ValueError("цель %d вне диапазона 5..25" % t)
+    overhead = 6 if t <= 12 else (7 if t <= 17 else 8)
+    ceiling = max(5, min(25, t - overhead))
+    if cpu is not None:
+        ceiling = min(ceiling, max(5, min(25, int(cpu))))
+    if t <= 8:
+        plan = {"bright": 8, "freq": 1_000_000, "bt": True, "wifi": True,
+                "usb": 2000, "slow": True}
+    elif t <= 12:
+        plan = {"bright": 15, "freq": 1_300_000, "bt": True, "wifi": True,
+                "usb": 2000, "slow": True}
+    elif t <= 17:
+        plan = {"bright": 30, "freq": 1_700_000, "bt": True, "wifi": True,
+                "usb": 2000, "slow": False}
+    else:
+        plan = {"bright": 55, "freq": None, "bt": False, "wifi": True,
+                "usb": None, "slow": False}
+    plan.update(target=t, cpu=ceiling, steps=[])
+    return plan
+
+
+def cascade_apply(target, cpu=None) -> dict:
+    """Каскад на цель T Вт: CPU-потолок + экран + радио + USB + фон."""
+    res = {"mode": "cascade", "applied": [], "skipped": [], "failed": [],
+           "steps": [], "plan": None, "restorable": False}
+    try:
+        plan = cascade_plan(target, cpu)
+    except ValueError as exc:
+        res["failed"].append("cascade: %s" % exc)
+        return res
+    res["plan"] = plan
+
+    knobs = {
+        "no_turbo": read(os.path.join(PSTATE_DIR, "no_turbo")),
+        "rapl_pl1": read(os.path.join(RAPL, "constraint_0_power_limit_uw")),
+        "max_perf_pct": read(os.path.join(PSTATE_DIR, "max_perf_pct")),
+    }
+    if not looks_typewriter(knobs):
+        res["failed"].append(
+            "режим выключен: каскад действует только при включённой "
+            "печатной машинке")
+        return res
+
+    prev = _cascade_read() or {}
+    prev.setdefault("bt_blocked", False)
+    prev.setdefault("brightness", None)
+
+    # --- 1. CPU + дискретка (готовая логика watts) -------------------------
+    w = set_watts(plan["cpu"])
+    res["applied"] += w.get("applied", [])
+    res["skipped"] += w.get("skipped", [])
+    res["failed"] += w.get("failed", [])
+    res["steps"].append({"key": "cpu", "cpu": plan["cpu"], "freq": plan["freq"]})
+
+    # --- 2. экран ----------------------------------------------------------
+    if prev.get("brightness") is None:
+        b = brightness()
+        prev["brightness"] = b.get("pct")
+    b = brightness(plan["bright"])
+    if b.get("failed"):
+        res["failed"] += b["failed"]
+    else:
+        res["applied"] += b["applied"]
+        res["steps"].append({"key": "screen", "bright": plan["bright"]})
+
+    # --- 3. радио ----------------------------------------------------------
+    if not plan["bt"] and prev.get("bt_blocked"):
+        ok, err = _rfkill(False)
+        if ok:
+            prev["bt_blocked"] = False
+            res["applied"].append("bluetooth unblocked")
+        else:
+            res["skipped"].append("bluetooth: %s" % (err or "rfkill"))
+    if plan["bt"]:
+        ok, err = _rfkill(True)
+        if ok:
+            prev["bt_blocked"] = prev.get("bt_blocked") or True
+            res["applied"].append("bluetooth blocked")
+            res["steps"].append({"key": "bt"})
+        else:
+            res["skipped"].append("bluetooth: %s" % (err or "rfkill"))
+    if plan["wifi"]:
+        ok, err = _wifi_ps(True)
+        if ok:
+            res["applied"].append("wifi power_save on")
+            res["steps"].append({"key": "wifi"})
+        else:
+            res["skipped"].append("wifi: %s" % (err or "iw"))
+
+    # --- 4. USB ------------------------------------------------------------
+    if not plan["usb"] and prev.get("usb"):
+        res["applied"] += _usb_restore(prev["usb"])
+        prev["usb"] = None
+    if plan["usb"]:
+        if prev.get("usb") is None:
+            prev["usb"] = _usb_save()
+        lines = _usb_apply(plan["usb"])
+        res["applied"] += lines
+        if lines:
+            res["steps"].append({"key": "usb"})
+
+    # --- 5. фон: свои же опросы --------------------------------------------
+    if plan["slow"]:
+        res["steps"].append({"key": "slow"})
+
+    res["steps"].append({"key": "dgpu"})
+    prev.update(plan=plan, cpu=plan["cpu"], target=plan["target"],
+                slow=bool(plan["slow"]))
+    _cascade_write(prev)
+    res["restorable"] = True
+    return res
+
+
+def cascade_off() -> dict:
+    """Снять каскад: вернуть яркость, Bluetooth, USB, фон."""
+    res = {"mode": "cascade-off", "applied": [], "skipped": [], "failed": []}
+    prev = _cascade_read()
+    if not prev:
+        res["skipped"].append("каскад не включён")
+        return res
+    if prev.get("brightness") is not None:
+        b = brightness(prev["brightness"])
+        res["applied"] += b.get("applied", [])
+        res["failed"] += b.get("failed", [])
+    if prev.get("bt_blocked"):
+        ok, err = _rfkill(False)
+        (res["applied"] if ok else res["failed"]).append(
+            "bluetooth unblocked" if ok else "bluetooth: %s" % err)
+    if prev.get("usb"):
+        res["applied"] += _usb_restore(prev["usb"])
+    try:
+        os.remove(CASCADE_FILE)
+    except OSError:
+        pass
+    res["applied"].append("каскад снят (CPU-потолки остались)")
+    return res
+
+
 def restore() -> dict:
+    # каскад трогал яркость/радио/USB — снимаем его первым, иначе
+    # после отката останется тусклый экран и выключенный Bluetooth
+    if os.path.exists(CASCADE_FILE):
+        cascade_off()
     snap = load_snapshot()
     if not snap:
         return {"mode": "restore", "applied": [], "skipped": [],
@@ -905,6 +1224,14 @@ def main(argv=None) -> int:
     p_draw = sub.add_parser("draw", parents=[common])
     p_draw.add_argument("--dur", type=float, default=1.2,
                         help="интервал измерения, с (0.3..5)")
+    p_cas = sub.add_parser("cascade", parents=[common])
+    p_cas.add_argument("target", type=int, help="цель по всей системе 5..25 Вт")
+    p_cas.add_argument("--cpu", type=int, default=None,
+                       help="ручной потолок CPU 5..25 Вт")
+    sub.add_parser("cascade-off", parents=[common])
+    p_br = sub.add_parser("brightness", parents=[common])
+    p_br.add_argument("pct", type=int, nargs="?", default=None,
+                      help="яркость в процентах (без аргумента — прочитать)")
 
     a = ap.parse_args(argv)
 
@@ -930,6 +1257,17 @@ def main(argv=None) -> int:
         return emit(apply_typewriter(), a.json)
     if a.cmd == "watts":
         return emit(set_watts(a.watt), a.json)
+    if a.cmd == "cascade":
+        return emit(cascade_apply(a.target, a.cpu), a.json)
+    if a.cmd == "cascade-off":
+        return emit(cascade_off(), a.json)
+    if a.cmd == "brightness":
+        res = brightness(a.pct)
+        if a.json:
+            print(json.dumps(res, ensure_ascii=False))
+        elif res.get("pct") is not None:
+            print("яркость %d%%" % res["pct"])
+        return 1 if res.get("failed") else 0
     if a.cmd == "draw":
         res = draw(a.dur)
         if a.json:

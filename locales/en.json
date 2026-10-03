@@ -166,5 +166,19 @@
   "tui.pwr_watts_ok5": " 5 h target met.",
   "tui.kbd_ext_on": "Backlight on (hotkey)",
   "tui.kbd_ext_off": "Backlight off (hotkey)",
-  "tui.pwr_conflict": "system profile {p} fights the Typewriter mode"
+  "tui.pwr_conflict": "system profile {p} fights the Typewriter mode",
+  "tui.unit_w": "W",
+  "tui.pwr_sys_lbl": "Whole-laptop cap (W)",
+  "tui.pwr_sys_off": "Cascade off — only the CPU cap applies.",
+  "tui.pwr_sys_apply": "Setting the whole-laptop target to {t} W…",
+  "tui.pwr_sys_ok": "Target {t} W applied",
+  "tui.pwr_sys_hint": "Selected {t} W: {steps}.",
+  "tui.pwr_sys_eta": "Expected ~{h1}–{h2} h.",
+  "tui.cs_cpu": "CPU ≤ {f} GHz · PL1 {p} W",
+  "tui.cs_screen": "screen {hz} Hz · brightness {b}%",
+  "tui.cs_bt": "Bluetooth off",
+  "tui.cs_wifi": "Wi-Fi power-save",
+  "tui.cs_usb": "USB autosuspend",
+  "tui.cs_slow": "background polling slowed",
+  "tui.cs_dgpu": "dGPU asleep"
 }
