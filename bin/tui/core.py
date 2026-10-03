@@ -141,6 +141,30 @@ async def probe_access(timeout: float = 6.0) -> str:
     return "error"
 
 
+def hw_rgb(timeout: float = 6.0) -> list | None:
+    """Что реально лежит в EC прямо сейчас — глаз, а не память.
+
+    state/last_state.json — это то, что мы ЗАПИСАЛИ. Физически подсветку
+    мог выключить кто угодно: клавиша на корпусе, чужой процесс, сброс
+    после сна. Поэтому вкладка спрашивает железо, а не файл, иначе
+    «свет выключен, а в программе горит».
+    """
+    try:
+        proc = subprocess.run(["sudo", "-n", BACKEND, "get"],
+                              capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    parts = (proc.stdout or "").split()
+    if len(parts) < 3:
+        return None
+    try:
+        return [int(float(parts[i])) for i in range(3)]
+    except ValueError:
+        return None
+
+
 def load_state() -> dict:
     try:
         with open(STATE_FILE, encoding="utf-8") as f:

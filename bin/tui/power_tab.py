@@ -36,6 +36,12 @@ TOOL = "power"
 
 # Доступно ~47 Вт·ч: столько / 5 ч = 9.4 Вт средней системы.
 # Это ЦЕЛЬ, которую подсказка сравнивает с реальным расходом батареи.
+# Ползунок потолка живёт и при «частично»: эта ручка значит лишь то, что
+# прошивка/термод сама перетёрла один-два ручка, а потолок PL1/частот
+# всё ещё наш и CLI его примет. Раньше «частично» молча гасила ползунок —
+# пользователь тянет стрелку, а ничего не происходит.
+_LIVE_MODES = (power_core.MODE_TYPEWRITER, power_core.MODE_PARTIAL)
+
 TARGET_HOURS_W = 9.4
 POLL_S = 5.0
 
@@ -315,7 +321,7 @@ class PowerTab(Vertical):
         # гасим только на время переворота тумблера: _busy включается и при
         # записи RAPL, а если погасить ползунок в этот момент, Textual снимет
         # с него фокус — и серия «стрелка→» вырождается в одно нажатие
-        on = mode == power_core.MODE_TYPEWRITER and not self._mode_busy
+        on = mode in _LIVE_MODES and not self._mode_busy
         # status() кладёт корневой снимок в st["root"]
         pl1 = (st.get("root") or {}).get("rapl_pl1_w")
         try:
@@ -332,16 +338,22 @@ class PowerTab(Vertical):
             # иначе врал бы друг против друга, когда карта просыпается.
             bat = st.get("battery") or {}
             root = st.get("root") or {}
-            watts = bat.get("watts")
+            # cpu_w — RAPL (мгновенно), watts — ступенчатый ЭС батареи:
+            # для мгновенной цифры берём RAPL, для оценки «сколько тянет
+            # ноут» — среднее, а не прыгающее значение.
+            cpu = st.get("cpu_w")
+            watts = bat.get("avg_w") or bat.get("watts")
             hours = bat.get("hours")
             try:
                 freq = int(float(root.get("max_freq_mhz") or 0))
             except (TypeError, ValueError):
                 freq = 0
             w_s = ("%.1f" % watts) if watts else "—"
+            c_s = ("%.1f" % cpu) if cpu else "—"
             line = t("tui.pwr_watts_now",
                      n=want,
                      f=freq or "—",
+                     c=c_s,
                      w=w_s,
                      h=_fmt_dur(hours) if hours else "—")
             try:
@@ -367,7 +379,7 @@ class PowerTab(Vertical):
     def on_watts_bar_changed(self, event: WattsBar.Changed):
         if self._busy or self._watts_syncing:
             return
-        if (self._st or {}).get("mode") != power_core.MODE_TYPEWRITER:
+        if (self._st or {}).get("mode") not in _LIVE_MODES:
             return                      # режим выключен — ползунок мёртв
         want = int(event.value)
         if want == self._watts_applied:
@@ -434,8 +446,12 @@ class PowerTab(Vertical):
         freq = root.get("max_freq_mhz")
         lines = [
             self._line(t("tui.pwr_profile"),
-                       "%s · platform %s" % (st.get("ppd") or "-",
-                                             root.get("platform_profile") or "-")),
+                       ("⚠ %s · " % t("tui.pwr_conflict",
+                                      p=st.get("ppd") or "-")
+                        if self.typewriter and st.get("ppd") == "performance"
+                        else "") + "%s · platform %s" % (
+                            st.get("ppd") or "-",
+                            root.get("platform_profile") or "-")),
             self._line(t("tui.pwr_cpu"),
                        "%s · %s · turbo %s · PL1 %s · %s" % (
                            root.get("governor") or "-",
@@ -478,9 +494,11 @@ class PowerTab(Vertical):
         """100% · Discharging · 14.7 Вт · ≈ 3 ч 13 мин — измеренное."""
         parts = ["%s%%" % (bat.get("capacity") or "-"),
                  bat.get("status") or "-"]
-        if bat.get("watts"):
-            parts.append(t("tui.pwr_watts", n=("%.1f" % bat["watts"])
-                           .rstrip("0").rstrip(".")))
+        # avg_w — среднее по падению энергии (стабильное, без ступеней ЭС)
+        w = bat.get("avg_w") or bat.get("watts")
+        if w:
+            parts.append(t("tui.pwr_watts",
+                           n=("%.1f" % w).rstrip("0").rstrip(".")))
         if bat.get("hours"):
             parts.append("≈ " + _fmt_dur(bat["hours"]))
         return " · ".join(parts)

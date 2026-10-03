@@ -40,6 +40,8 @@ from textual.widgets import Button, Input, Label, Static, Switch
 from tui import core
 from tui.slider import AsciiSlider, SineWave
 
+import time
+
 import victus_log as vlog
 import victus_palette as pal
 from i18n import t
@@ -161,6 +163,9 @@ class KbdTab(Vertical):
         self._push_timer = None
         self._level_timer = None
         self._syncing = False
+        # окно, в которое мы сами только что писали в EC: опрос в этот
+        # момент мог бы прочитать полубайтовую правку и мигнуть тумблером
+        self._hw_quiet_until = 0.0
 
     # --- композиция ------------------------------------------------------------
 
@@ -297,23 +302,30 @@ class KbdTab(Vertical):
             self._set_status(core.access_hint(access), error=True)
 
     def _poll_external(self) -> None:
-        """Подхват состояния, изменённого вне TUI.
+        """Сверка с железом: подсветку мог выключить кто угодно.
 
-        Горячая клавиша на корпусе (victus-kbd power) пишет и EC, и
-        last_state.json; вкладка обязана показать ровно это, а не то,
-        что помнит с момента открытия.
+        Файл last_state.json помнит, что мы ЗАПИСАЛИ; EC отвечает на
+        вопрос «а горит ли она сейчас». Спрашиваем EC (через
+        victus-kbd get, NOPASSWD) и подтягиваем под него и тумблер, и
+        цвет, и сам файл — иначе приложение врало бы до перезапуска.
         """
-        if self._syncing:
+        if self._syncing or time.monotonic() < self._hw_quiet_until:
             return
         st = core.load_state()
-        want_power = bool(st.get("power", True))
-        want_rgb = tuple(core._norm_rgb(st.get("rgb"), self.color))
+        hw = core.hw_rgb()
+        if hw is None:
+            # sudo недостен — остаёмся на том, что записали сами
+            hw = list(st.get("rgb") or [0, 0, 0]) if st.get("power") else [0, 0, 0]
+        lit = any(int(c) > 0 for c in hw)
+        # петля сама двигает байты в EC: за её цветом не гонимся, важно
+        # только то, что свет вообще есть
+        want_power = bool(lit)
+        want_rgb = (tuple(hw) if lit and not st.get("running")
+                    else tuple(core._norm_rgb(st.get("rgb"), self.color)))
         if want_power == self.power and want_rgb == tuple(self.color):
             return
         self.power = want_power
         self.color = want_rgb
-        # пока мы двигаем виджеты, их события не должны включать цепочку
-        # «программное изменение → заново применить в EC»
         self._syncing = True
         try:
             sw = self.query_one("#power", Switch)
@@ -322,6 +334,11 @@ class KbdTab(Vertical):
         finally:
             self._syncing = False
         self._sync_controls()
+        # файл тоже приводим к железу: иначе следующий старт унаследует враньё
+        st["power"] = want_power
+        if lit and not st.get("running"):
+            st["rgb"] = list(want_rgb)
+        core.save_state(st)
         self._set_status(t("tui.kbd_ext_on") if want_power
                          else t("tui.kbd_ext_off"))
 
@@ -489,6 +506,7 @@ class KbdTab(Vertical):
     # --- действия ---------------------------------------------------------------
 
     async def _apply_current(self):
+        self._hw_quiet_until = time.monotonic() + 1.0
         # ручной цвет всегда побеждает: снимаем любую фоновую петлю,
         # даже если TUI про неё не знает (демон/чужой процесс мог её завести)
         self.running = False
@@ -678,6 +696,7 @@ class KbdTab(Vertical):
 
     @work(exclusive=True)
     async def _power_changed(self, on: bool):
+        self._hw_quiet_until = time.monotonic() + 1.0
         self.power = bool(on)
         if not on:
             self.running = False

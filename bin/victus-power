@@ -10,6 +10,7 @@
     victus-power restore             вернуть снимок, сделанный перед apply
     victus-power mux <hybrid|discrete>  явное переключение MUX (нужен reboot)
     victus-power watts <5..25>          потолок мощности CPU (режим включён)
+    victus-power draw [--dur S]         живая мощность пакета CPU из RAPL
 
 Снимок прошлого состояния: /var/lib/victus-suite/power-state.json
 Всё, что не поддерживается прошивкой/драйвером, пропускается с пометкой —
@@ -116,6 +117,9 @@ def cpu_ids() -> list[int]:
     return ids
 
 
+# NB: вторая функция с этим именем ниже (_cap_freq_w) перекрыла бы эту —
+# apply падал бы с TypeError. Разные задачи: здесь потолок на одно
+# ядро, там — формула от ватт для ползунка.
 def _cap_freq(cpu: int, want: str) -> str:
     """Не выше того, что ядро разрешает прямо сейчас.
 
@@ -540,9 +544,55 @@ def _cap_plan(w: int):
     )
 
 
-def _cap_freq(w: int) -> int:
+def _cap_freq_w(w: int) -> int:
     """Потолок частоты под бюджет: 5 Вт → 1.0 ГГц, 15 → 1.8, 25 → 2.6."""
     return 1_000_000 + (w - 5) * 80_000
+
+
+def draw(dur: float = 1.2) -> dict:
+    """Живая мощность пакета CPU: энергия RAPL за интервал / время.
+
+    Зачем: `power_now` батареи отдаёт ЭС промеженный, ступенчатый сигнал
+    (19.5 → 25 Вт уже ПОСЛЕ снятия нагрузки) — по нему видно только то,
+    что было несколько секунд назад. RAPL считает реальную энергию ядра,
+    поэтому цифра реагирует на перетаскивание ползунка мгновенно.
+    """
+    res = {"mode": "draw", "dur": 0.0}
+    path = os.path.join(RAPL, "energy_uj")
+    try:
+        a = int(str(read(path) or "").strip())
+    except (TypeError, ValueError):
+        a = None
+    if a is None:
+        res["failed"].append("draw: нет %s" % path)
+        return res
+    t0 = time.monotonic()
+    time.sleep(max(0.3, min(5.0, float(dur or 1.2))))
+    dt = time.monotonic() - t0
+    try:
+        b = int(str(read(path) or "").strip())
+    except (TypeError, ValueError):
+        b = None
+    if b is None or dt <= 0:
+        res["failed"].append("draw: не удалось прочитать энергию")
+        return res
+    if b < a:                      # переполнение счётчика — интервал не берём
+        res["skipped"].append("draw: счётчик энергии переполнился")
+        return res
+    res["dur"] = round(dt, 2)
+    res["cpu_w"] = round((b - a) / 1e6 / dt, 2)
+    pl1 = read(os.path.join(RAPL, "constraint_0_power_limit_uw"))
+    try:
+        res["pl1_w"] = round(int(str(pl1).split()[0]) / 1e6, 1)
+    except (TypeError, ValueError, AttributeError):
+        res["pl1_w"] = None
+    res["no_turbo"] = read(os.path.join(PSTATE_DIR, "no_turbo"))
+    try:
+        res["max_freq_mhz"] = int(int(read(
+            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")) / 1000)
+    except (TypeError, ValueError, AttributeError):
+        res["max_freq_mhz"] = None
+    return res
 
 
 def set_watts(watt) -> dict:
@@ -590,7 +640,7 @@ def set_watts(watt) -> dict:
 
     # частота — на каждое ядро, но никогда выше его собственного
     # cpuinfo_max_freq: E-ядра на этом железе кончаются на 1.9 ГГц
-    freq_want = _cap_freq(w)
+    freq_want = _cap_freq_w(w)
     cores = sorted(glob.glob(
         "/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_max_freq"))
     if not cores:
@@ -852,6 +902,9 @@ def main(argv=None) -> int:
     p_mux.add_argument("mode", choices=["hybrid", "discrete"])
     p_watts = sub.add_parser("watts", parents=[common])
     p_watts.add_argument("watt", type=int, help="потолок мощности CPU 5..25 Вт")
+    p_draw = sub.add_parser("draw", parents=[common])
+    p_draw.add_argument("--dur", type=float, default=1.2,
+                        help="интервал измерения, с (0.3..5)")
 
     a = ap.parse_args(argv)
 
@@ -877,6 +930,17 @@ def main(argv=None) -> int:
         return emit(apply_typewriter(), a.json)
     if a.cmd == "watts":
         return emit(set_watts(a.watt), a.json)
+    if a.cmd == "draw":
+        res = draw(a.dur)
+        if a.json:
+            print(json.dumps(res, ensure_ascii=False))
+        elif res.get("failed"):
+            print("! %s" % res["failed"][0])
+        else:
+            print("cpu %.2f Вт · PL1 %s Вт · частота до %s МГц (%.2f с)" % (
+                res.get("cpu_w", 0), res.get("pl1_w"),
+                res.get("max_freq_mhz"), res.get("dur", 0)))
+        return 1 if res.get("failed") else 0
 
     ap.print_help()
     return 2

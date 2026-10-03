@@ -159,11 +159,12 @@
   "tui.pwr_watts_apply": "Setting cap to {n} W…",
   "tui.pwr_watts_fail": "Failed: {msg}",
   "tui.pwr_watts_lbl": "CPU cap (W)",
-  "tui.pwr_watts_now": "CPU capped at {n} W, clocks up to {f} MHz. Whole laptop draws {w} W → {h}.",
+  "tui.pwr_watts_now": "Cap {n} W, frequency up to {f} MHz. CPU now {c} W, whole laptop on average {w} W → {h}.",
   "tui.pwr_watts_off": "The 5–25 W cap only applies while Typewriter is on.",
   "tui.pwr_watts_ok": "Cap {n} W applied",
-  "tui.pwr_watts_gap": " 5 h needs {d} W less (display, SoC, radios are not capped).",
+  "tui.pwr_watts_gap": " {d} W short of 5 h (display, SoC and radio are not on the slider).",
   "tui.pwr_watts_ok5": " 5 h target met.",
   "tui.kbd_ext_on": "Backlight on (hotkey)",
-  "tui.kbd_ext_off": "Backlight off (hotkey)"
+  "tui.kbd_ext_off": "Backlight off (hotkey)",
+  "tui.pwr_conflict": "system profile {p} fights the Typewriter mode"
 }

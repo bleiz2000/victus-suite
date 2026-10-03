@@ -157,6 +157,28 @@ def _num(info: dict, key: str, scale: float):
         return None
 
 
+_ENERGY_CACHE: dict = {}
+
+
+def _avg_watts(wh: float | None) -> float | None:
+    """Средняя мощность из падения energy_now за последние 12..600 с."""
+    now = time.monotonic()
+    prev_wh = _ENERGY_CACHE.get("wh")
+    if wh is None:
+        return _ENERGY_CACHE.get("avg")
+    if prev_wh is None or now - _ENERGY_CACHE.get("t", 0) < 12:
+        # первый замер или интервал ещё короткий — держим прежнюю цифру,
+        # иначе она прыгала бы на каждом тике и «лгала» бы ещё больше
+        _ENERGY_CACHE.update(wh=wh, t=now)
+        return _ENERGY_CACHE.get("avg")
+    dt = now - _ENERGY_CACHE["t"]
+    _ENERGY_CACHE.update(wh=wh, t=now)
+    if dt > 600 or prev_wh <= wh:
+        return _ENERGY_CACHE.get("avg")          # спящий режим / зарядка
+    _ENERGY_CACHE["avg"] = round((prev_wh - wh) / (dt / 3600.0), 1)
+    return _ENERGY_CACHE["avg"]
+
+
 def battery() -> dict:
     """Заряд + сколько он продержит при ТЕКУЩЕМ расходе.
 
@@ -193,6 +215,10 @@ def battery() -> dict:
         if cur and vol:
             w = cur * vol                            # fallback: A × V
     info["watts"] = round(w, 1) if w else None
+    # ЭС показывает `power_now` с большой задержкой и ступенями (замерено:
+    # 19.5 Вт → 25 Вт уже ПОСЛЕ снятия нагрузки). Поэтому рядом держим
+    # среднее по падению энергии — честное, но медленное.
+    info["avg_w"] = _avg_watts(wh)
 
     status = (info.get("status") or "").lower()
     hours = None
@@ -203,6 +229,23 @@ def battery() -> dict:
             hours = max(0.0, full - wh) / w          # сколько до полного
     info["hours"] = round(hours, 2) if hours and hours > 0.02 else None
     return info
+
+
+def cpu_w() -> float | None:
+    """Мгновенная мощность пакета CPU (RAPL, интервал ~1.2 с).
+
+    Единственная цифра, которая реагирует на ползунок потолка сразу:
+    батарейный `power_now` отстаёт на секунды и двигается ступенями.
+    """
+    data, _err = _json(["sudo", "-n", POWER, "draw", "--dur", "1.2", "--json"],
+                       timeout=12.0)
+    if data is None:
+        return None
+    val = data.get("cpu_w")
+    try:
+        return round(float(val), 1)
+    except (TypeError, ValueError):
+        return None
 
 
 def fan_status() -> dict | None:
@@ -406,7 +449,7 @@ def is_active() -> bool:
 
 def status() -> dict:
     """Сводка для вкладки «Питание». Части, которых нет, просто отсутствуют."""
-    st = {"battery": battery()}
+    st = {"battery": battery(), "cpu_w": cpu_w()}
     st["ppd"] = ppd_get()
     st["monitor"] = monitor_info()
     st["fans"] = fan_status()
